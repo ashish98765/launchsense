@@ -9,30 +9,30 @@ const { calculateRiskScore, getDecision } = require("./decisionEngine");
 
 const app = express();
 
-/* =====================
+/* =======================
    MIDDLEWARE
-===================== */
+======================= */
 app.use(cors());
 app.use(express.json());
 
-/* =====================
+/* =======================
    SUPABASE SETUP
-===================== */
+======================= */
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-/* =====================
+/* =======================
    ROOT HEALTH CHECK
-===================== */
+======================= */
 app.get("/", (req, res) => {
   res.json({ status: "LaunchSense backend running" });
 });
 
-/* =====================
+/* =======================
    SIGNUP API
-===================== */
+======================= */
 app.post("/signup", async (req, res) => {
   try {
     const { email } = req.body;
@@ -46,7 +46,7 @@ app.post("/signup", async (req, res) => {
 
     const { error } = await supabase
       .from("launchsense")
-      .insert([{ email }]);
+      .insert({ email });
 
     if (error) {
       console.error("Signup insert error:", error);
@@ -66,9 +66,9 @@ app.post("/signup", async (req, res) => {
   }
 });
 
-/* =====================
+/* =======================
    GAME SESSION + DECISION API
-===================== */
+======================= */
 app.post("/api/decision", async (req, res) => {
   try {
     const {
@@ -81,21 +81,54 @@ app.post("/api/decision", async (req, res) => {
       early_quit
     } = req.body;
 
-    if (
-      !game_id ||
-      !player_id ||
-      !session_id ||
-      playtime === undefined ||
-      deaths === undefined ||
-      restarts === undefined ||
-      early_quit === undefined
-    ) {
+    /* ---------- REQUIRED CHECK ---------- */
+    if (!game_id || !player_id || !session_id) {
       return res.status(400).json({
-        error: "Invalid gameplay data"
+        error: "Missing required identifiers"
       });
     }
 
-    /* Risk calculation */
+    /* ---------- TYPE + RANGE VALIDATION ---------- */
+    if (
+      typeof playtime !== "number" || playtime < 0 ||
+      typeof deaths !== "number" || deaths < 0 ||
+      typeof restarts !== "number" || restarts < 0 ||
+      typeof early_quit !== "boolean"
+    ) {
+      return res.status(400).json({
+        error: "Invalid gameplay data types or values"
+      });
+    }
+
+    /* ---------- DUPLICATE SESSION CHECK ---------- */
+    const { data: existingSession, error: fetchError } =
+      await supabase
+        .from("game_sessions")
+        .select("risk_score, decision")
+        .eq("game_id", game_id)
+        .eq("player_id", player_id)
+        .eq("session_id", session_id)
+        .limit(1)
+        .maybeSingle();
+
+    if (fetchError) {
+      console.error("Session fetch error:", fetchError);
+      return res.status(500).json({
+        error: "Session lookup failed"
+      });
+    }
+
+    if (existingSession) {
+      // 🔁 DUPLICATE FOUND → RETURN EXISTING DECISION
+      return res.json({
+        success: true,
+        risk_score: existingSession.risk_score,
+        decision: existingSession.decision,
+        duplicate: true
+      });
+    }
+
+    /* ---------- RISK CALCULATION ---------- */
     const risk_score = calculateRiskScore({
       playtime,
       deaths,
@@ -103,13 +136,12 @@ app.post("/api/decision", async (req, res) => {
       earlyQuit: early_quit
     });
 
-    /* Decision */
     const decision = getDecision(risk_score);
 
-    /* Save session */
-    const { error } = await supabase
+    /* ---------- SAVE SESSION ---------- */
+    const { error: insertError } = await supabase
       .from("game_sessions")
-      .insert([{
+      .insert({
         game_id,
         player_id,
         session_id,
@@ -119,30 +151,32 @@ app.post("/api/decision", async (req, res) => {
         early_quit,
         risk_score,
         decision
-      }]);
+      });
 
-    if (error) {
-      console.error("Game session insert error:", error);
+    if (insertError) {
+      console.error("Game session insert error:", insertError);
       return res.status(500).json({
         error: "Failed to save game session"
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
       risk_score,
       decision
     });
 
   } catch (err) {
-    console.error("Decision API error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    console.error("Decision API crash:", err);
+    return res.status(500).json({
+      error: "Internal server error"
+    });
   }
 });
 
-/* =====================
-   DEBUG GET API (Browser test)
-===================== */
+/* =======================
+   DEBUG DECISION API
+======================= */
 app.get("/debug-decision", (req, res) => {
   try {
     const playtime = Number(req.query.playtime || 1200);
@@ -159,19 +193,16 @@ app.get("/debug-decision", (req, res) => {
 
     const decision = getDecision(risk_score);
 
-    res.json({
-      risk_score,
-      decision
-    });
+    res.json({ risk_score, decision });
   } catch (err) {
     console.error("Debug decision error:", err);
     res.status(500).json({ error: "Debug failed" });
   }
 });
 
-/* =====================
+/* =======================
    SERVER START
-===================== */
+======================= */
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`LaunchSense backend running on port ${PORT}`);
