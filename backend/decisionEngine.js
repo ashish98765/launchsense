@@ -1,17 +1,17 @@
-// decisionEngine.js
+// backend/decisionEngine.js
 
 function calculatePlaytimeRisk(playtimeSeconds) {
-  if (playtimeSeconds > 1200) return 0;       // >20 min
-  if (playtimeSeconds > 600) return 10;        // 10–20 min
-  if (playtimeSeconds > 300) return 25;        // 5–10 min
-  return 40;                                   // <5 min
+  if (playtimeSeconds > 1200) return 0;   // >20 min
+  if (playtimeSeconds > 600) return 10;   // 10–20 min
+  if (playtimeSeconds > 300) return 25;   // 5–10 min
+  return 40;                              // <5 min
 }
 
 function calculateFrustrationRisk(deaths, restarts) {
   const score = deaths * 3 + restarts * 5;
 
   if (score < 10) return 5;
-  if (score <= 20) return 15;
+  if (score < 20) return 15;
   return 30;
 }
 
@@ -26,17 +26,13 @@ function calculateRiskScore(metrics) {
   // Frustration
   risk += calculateFrustrationRisk(deaths, restarts);
 
-  // Early quit
+  // Early quit penalty
   if (earlyQuit === true) {
     risk += 25;
   }
 
-  // Chaos bonus
-  if (
-    playtime < 300 &&
-    deaths >= 5 &&
-    earlyQuit === true
-  ) {
+  // Chaos pattern
+  if (playtime < 300 && deaths >= 5 && earlyQuit === true) {
     risk += 15;
   }
 
@@ -47,8 +43,8 @@ function calculateRiskScore(metrics) {
 }
 
 function getDecision(riskScore) {
-  if (riskScore <= 30) return "GO";
-  if (riskScore <= 65) return "ITERATE";
+  if (riskScore < 30) return "GO";
+  if (riskScore < 65) return "ITERATE";
   return "KILL";
 }
 
