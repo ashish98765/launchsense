@@ -32,10 +32,13 @@ app.post("/signup", (req, res) => {
   const { email } = req.body;
 
   if (!email) {
-    return res.status(400).json({ error: "Email is required" });
+    return res.status(400).json({
+      success: false,
+      error: "Email is required",
+    });
   }
 
-  console.log("Signup email:", email);
+  console.log("Signup email received:", email);
 
   return res.json({
     success: true,
@@ -66,7 +69,9 @@ app.post("/api/decision", (req, res) => {
       metrics.restarts === undefined ||
       metrics.earlyQuit === undefined
     ) {
-      return res.status(400).json({ error: "Invalid gameplay data" });
+      return res.status(400).json({
+        error: "Invalid gameplay data",
+      });
     }
 
     const riskScore = calculateRiskScore(metrics);
@@ -78,7 +83,9 @@ app.post("/api/decision", (req, res) => {
     });
   } catch (error) {
     console.error("Decision error:", error);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({
+      error: "Internal server error",
+    });
   }
 });
 
