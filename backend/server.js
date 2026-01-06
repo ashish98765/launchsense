@@ -7,27 +7,46 @@ const { calculateRiskScore, getDecision } = require("./decisionEngine");
 
 const app = express();
 
-/* =====================
+/* ======================
    MIDDLEWARE
-===================== */
+====================== */
 app.use(cors());
 app.use(express.json());
 
-/* =====================
+/* ======================
    ROOT HEALTH CHECK
-===================== */
+====================== */
 app.get("/", (req, res) => {
   res.json({ status: "LaunchSense backend running" });
 });
 
-/* =====================
-   ROUTES
-===================== */
+/* ======================
+   HEALTH ROUTES
+====================== */
 app.use("/api", healthRoutes);
 
-/* =====================
+/* ======================
+   SIGNUP API (TEMP – NO DB)
+====================== */
+app.post("/signup", (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: "Email is required" });
+  }
+
+  console.log("Signup email:", email);
+
+  return res.json({
+    success: true,
+    message: "Signup received",
+    email,
+  });
+});
+
+/* ======================
    DECISION API
-===================== */
+====================== */
 /*
 Expected body:
 {
@@ -41,7 +60,6 @@ app.post("/api/decision", (req, res) => {
   try {
     const metrics = req.body;
 
-    // basic validation
     if (
       metrics.playtime === undefined ||
       metrics.deaths === undefined ||
@@ -56,7 +74,7 @@ app.post("/api/decision", (req, res) => {
 
     res.json({
       riskScore,
-      decision
+      decision,
     });
   } catch (error) {
     console.error("Decision error:", error);
@@ -64,9 +82,9 @@ app.post("/api/decision", (req, res) => {
   }
 });
 
-/* =====================
+/* ======================
    SERVER START
-===================== */
+====================== */
 const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, () => {
