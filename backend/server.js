@@ -2,63 +2,76 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 
-const healthRoutes = require("./routes/health");
+const { createClient } = require("@supabase/supabase-js");
 const { calculateRiskScore, getDecision } = require("./decisionEngine");
 
 const app = express();
 
-/* ======================
+/* =========================
    MIDDLEWARE
-====================== */
+========================= */
 app.use(cors());
 app.use(express.json());
 
-/* ======================
-   ROOT HEALTH CHECK
-====================== */
+/* =========================
+   SUPABASE SETUP
+========================= */
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
+
+/* =========================
+   ROOT CHECK
+========================= */
 app.get("/", (req, res) => {
   res.json({ status: "LaunchSense backend running" });
 });
 
-/* ======================
-   HEALTH ROUTES
-====================== */
-app.use("/api", healthRoutes);
+/* =========================
+   SIGNUP API (DB CONNECTED)
+========================= */
+app.post("/signup", async (req, res) => {
+  try {
+    const { email } = req.body;
 
-/* ======================
-   SIGNUP API (TEMP – NO DB)
-====================== */
-app.post("/signup", (req, res) => {
-  const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        error: "Email is required"
+      });
+    }
 
-  if (!email) {
-    return res.status(400).json({
+    const { data, error } = await supabase
+      .from("launchsense")
+      .insert([{ email }]);
+
+    if (error) {
+      console.error("Supabase error:", error);
+      return res.status(500).json({
+        success: false,
+        error: "Database insert failed"
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Signup successful",
+      data
+    });
+
+  } catch (err) {
+    console.error("Server error:", err);
+    return res.status(500).json({
       success: false,
-      error: "Email is required",
+      error: "Internal server error"
     });
   }
-
-  console.log("Signup email received:", email);
-
-  return res.json({
-    success: true,
-    message: "Signup received",
-    email,
-  });
 });
 
-/* ======================
+/* =========================
    DECISION API
-====================== */
-/*
-Expected body:
-{
-  playtime: number,
-  deaths: number,
-  restarts: number,
-  earlyQuit: boolean
-}
-*/
+========================= */
 app.post("/api/decision", (req, res) => {
   try {
     const metrics = req.body;
@@ -70,7 +83,7 @@ app.post("/api/decision", (req, res) => {
       metrics.earlyQuit === undefined
     ) {
       return res.status(400).json({
-        error: "Invalid gameplay data",
+        error: "Invalid gameplay data"
       });
     }
 
@@ -79,21 +92,21 @@ app.post("/api/decision", (req, res) => {
 
     res.json({
       riskScore,
-      decision,
+      decision
     });
+
   } catch (error) {
     console.error("Decision error:", error);
     res.status(500).json({
-      error: "Internal server error",
+      error: "Internal server error"
     });
   }
 });
 
-/* ======================
+/* =========================
    SERVER START
-====================== */
+========================= */
 const PORT = process.env.PORT || 3001;
-
 app.listen(PORT, () => {
   console.log(`LaunchSense backend running on port ${PORT}`);
 });
