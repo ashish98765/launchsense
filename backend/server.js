@@ -9,30 +9,30 @@ const { calculateRiskScore, getDecision } = require("./decisionEngine");
 
 const app = express();
 
-/* =======================
+/* =========================
    MIDDLEWARE
-======================= */
+========================= */
 app.use(cors());
 app.use(express.json());
 
-/* =======================
+/* =========================
    SUPABASE SETUP
-======================= */
+========================= */
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-/* =======================
+/* =========================
    HEALTH CHECK
-======================= */
+========================= */
 app.get("/", (req, res) => {
   res.json({ status: "LaunchSense backend running" });
 });
 
-/* =======================
+/* =========================
    SIGNUP API
-======================= */
+========================= */
 app.post("/signup", async (req, res) => {
   try {
     const { email } = req.body;
@@ -48,13 +48,14 @@ app.post("/signup", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
+    console.error("Signup error:", err);
     res.status(500).json({ error: "Signup failed" });
   }
 });
 
-/* =======================
+/* =========================
    GAME SESSION DECISION API
-======================= */
+========================= */
 app.post("/api/decision", async (req, res) => {
   try {
     const {
@@ -67,10 +68,12 @@ app.post("/api/decision", async (req, res) => {
       early_quit
     } = req.body;
 
+    /* REQUIRED CHECK */
     if (!game_id || !player_id || !session_id) {
       return res.status(400).json({ error: "Missing identifiers" });
     }
 
+    /* TYPE CHECK */
     if (
       typeof playtime !== "number" ||
       typeof deaths !== "number" ||
@@ -80,7 +83,7 @@ app.post("/api/decision", async (req, res) => {
       return res.status(400).json({ error: "Invalid data types" });
     }
 
-    // DUPLICATE CHECK
+    /* DUPLICATE SESSION CHECK */
     const { data: existing } = await supabase
       .from("game_sessions")
       .select("risk_score, decision")
@@ -98,6 +101,7 @@ app.post("/api/decision", async (req, res) => {
       });
     }
 
+    /* RISK + DECISION */
     const risk_score = calculateRiskScore({
       playtime,
       deaths,
@@ -107,17 +111,22 @@ app.post("/api/decision", async (req, res) => {
 
     const decision = getDecision(risk_score);
 
-    await supabase.from("game_sessions").insert([{
-      game_id,
-      player_id,
-      session_id,
-      playtime,
-      deaths,
-      restarts,
-      early_quit,
-      risk_score,
-      decision
-    }]);
+    /* SAVE SESSION */
+    const { error: insertError } = await supabase
+      .from("game_sessions")
+      .insert([{
+        game_id,
+        player_id,
+        session_id,
+        playtime,
+        deaths,
+        restarts,
+        early_quit,
+        risk_score,
+        decision
+      }]);
+
+    if (insertError) throw insertError;
 
     res.json({
       success: true,
@@ -127,13 +136,14 @@ app.post("/api/decision", async (req, res) => {
     });
 
   } catch (err) {
+    console.error("Decision API failed:", err);
     res.status(500).json({ error: "Decision API failed" });
   }
 });
 
-/* =====================================================
-   STEP 30 — GAME ANALYTICS API (🔥 NEW)
-===================================================== */
+/* =========================
+   GAME ANALYTICS API
+========================= */
 app.get("/api/analytics/game/:game_id", async (req, res) => {
   try {
     const { game_id } = req.params;
@@ -149,7 +159,6 @@ app.get("/api/analytics/game/:game_id", async (req, res) => {
     }
 
     const total = data.length;
-
     let go = 0, iterate = 0, kill = 0, riskSum = 0;
 
     data.forEach(s => {
@@ -162,8 +171,8 @@ app.get("/api/analytics/game/:game_id", async (req, res) => {
     const avgRisk = Math.round(riskSum / total);
 
     let health = "STABLE";
-    if (go / total >= 0.6 && avgRisk < 40) health = "GOOD";
-    if (kill / total >= 0.3 || avgRisk > 65) health = "BAD";
+    if (go / total > 0.6 && avgRisk < 40) health = "GOOD";
+    if (kill / total > 0.3 && avgRisk > 65) health = "BAD";
 
     res.json({
       game_id,
@@ -176,14 +185,66 @@ app.get("/api/analytics/game/:game_id", async (req, res) => {
     });
 
   } catch (err) {
+    console.error("Analytics failed:", err);
     res.status(500).json({ error: "Analytics failed" });
   }
 });
 
-/* =======================
+/* =========================
+   PLAYER ANALYTICS API
+========================= */
+app.get("/api/analytics/player/:player_id", async (req, res) => {
+  try {
+    const { player_id } = req.params;
+
+    const { data, error } = await supabase
+      .from("game_sessions")
+      .select("risk_score, decision, early_quit")
+      .eq("player_id", player_id);
+
+    if (error) throw error;
+    if (!data || data.length === 0) {
+      return res.json({ player_id, total_sessions: 0 });
+    }
+
+    let riskSum = 0, quit = 0, go = 0, iterate = 0, kill = 0;
+
+    data.forEach(s => {
+      riskSum += s.risk_score;
+      if (s.early_quit) quit++;
+      if (s.decision === "GO") go++;
+      else if (s.decision === "ITERATE") iterate++;
+      else if (s.decision === "KILL") kill++;
+    });
+
+    const avgRisk = Math.round(riskSum / data.length);
+    const quitPercent = Math.round((quit / data.length) * 100);
+
+    let player_type = "NORMAL";
+    if (avgRisk >= 70 || quitPercent >= 40) player_type = "TOXIC";
+    else if (avgRisk >= 40) player_type = "RISKY";
+
+    res.json({
+      player_id,
+      total_sessions: data.length,
+      average_risk: avgRisk,
+      early_quit_percent: quitPercent,
+      go,
+      iterate,
+      kill,
+      player_type
+    });
+
+  } catch (err) {
+    console.error("Player analytics failed:", err);
+    res.status(500).json({ error: "Player analytics failed" });
+  }
+});
+
+/* =========================
    SERVER START
-======================= */
+========================= */
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`LaunchSense backend running on ${PORT}`);
+  console.log(`LaunchSense backend running on port ${PORT}`);
 });
