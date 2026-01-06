@@ -9,30 +9,30 @@ const { calculateRiskScore, getDecision } = require("./decisionEngine");
 
 const app = express();
 
-/* =======================
+/* =====================
    MIDDLEWARE
-======================= */
+===================== */
 app.use(cors());
 app.use(express.json());
 
-/* =======================
+/* =====================
    SUPABASE SETUP
-======================= */
+===================== */
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-/* =======================
+/* =====================
    ROOT HEALTH CHECK
-======================= */
+===================== */
 app.get("/", (req, res) => {
   res.json({ status: "LaunchSense backend running" });
 });
 
-/* =======================
+/* =====================
    SIGNUP API
-======================= */
+===================== */
 app.post("/signup", async (req, res) => {
   try {
     const { email } = req.body;
@@ -66,9 +66,9 @@ app.post("/signup", async (req, res) => {
   }
 });
 
-/* =======================
-   GAME SESSION / DECISION API
-======================= */
+/* =====================
+   GAME SESSION + DECISION API
+===================== */
 app.post("/api/decision", async (req, res) => {
   try {
     const {
@@ -90,12 +90,9 @@ app.post("/api/decision", async (req, res) => {
 
     /* ---------- TYPE & RANGE VALIDATION ---------- */
     if (
-      typeof playtime !== "number" ||
-      playtime < 0 ||
-      typeof deaths !== "number" ||
-      deaths < 0 ||
-      typeof restarts !== "number" ||
-      restarts < 0 ||
+      typeof playtime !== "number" || playtime < 0 ||
+      typeof deaths !== "number" || deaths < 0 ||
+      typeof restarts !== "number" || restarts < 0 ||
       typeof early_quit !== "boolean"
     ) {
       return res.status(400).json({
@@ -121,7 +118,6 @@ app.post("/api/decision", async (req, res) => {
     }
 
     if (existingSession) {
-      // DUPLICATE FOUND → RETURN EXISTING RESULT
       return res.json({
         success: true,
         risk_score: existingSession.risk_score,
@@ -173,15 +169,59 @@ app.post("/api/decision", async (req, res) => {
     });
   } catch (err) {
     console.error("Decision API crash:", err);
-    return res.status(500).json({
-      error: "Internal server error",
-    });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
-/* =======================
+/* =====================
+   STEP 29 — DECISION HISTORY API
+===================== */
+app.get("/api/decisions/history", async (req, res) => {
+  try {
+    const { game_id, player_id, limit = 10 } = req.query;
+
+    if (!game_id) {
+      return res.status(400).json({
+        error: "game_id is required",
+      });
+    }
+
+    let query = supabase
+      .from("game_sessions")
+      .select(
+        "session_id, player_id, risk_score, decision, created_at"
+      )
+      .eq("game_id", game_id)
+      .order("created_at", { ascending: false })
+      .limit(Number(limit));
+
+    if (player_id) {
+      query = query.eq("player_id", player_id);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error("History fetch error:", error);
+      return res.status(500).json({
+        error: "Failed to fetch history",
+      });
+    }
+
+    res.json({
+      success: true,
+      count: data.length,
+      sessions: data,
+    });
+  } catch (err) {
+    console.error("History API crash:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/* =====================
    DEBUG DECISION API (BROWSER TEST)
-======================= */
+===================== */
 app.get("/debug-decision", (req, res) => {
   try {
     const playtime = Number(req.query.playtime || 1200);
@@ -198,19 +238,16 @@ app.get("/debug-decision", (req, res) => {
 
     const decision = getDecision(risk_score);
 
-    res.json({
-      risk_score,
-      decision,
-    });
+    res.json({ risk_score, decision });
   } catch (err) {
     console.error("Debug decision error:", err);
     res.status(500).json({ error: "Debug failed" });
   }
 });
 
-/* =======================
+/* =====================
    SERVER START
-======================= */
+===================== */
 const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, () => {
