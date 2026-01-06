@@ -22,10 +22,12 @@ const supabase = createClient(
 );
 
 /* ======================
-   ROOT CHECK
+   ROOT HEALTH CHECK
 ====================== */
 app.get("/", (req, res) => {
-  res.json({ status: "LaunchSense backend running" });
+  res.json({
+    status: "LaunchSense backend running",
+  });
 });
 
 /* ======================
@@ -47,7 +49,7 @@ app.post("/signup", async (req, res) => {
       .insert([{ email }]);
 
     if (error) {
-      console.error("Supabase error:", error);
+      console.error("Supabase insert error:", error);
       return res.status(500).json({
         success: false,
         error: "Database insert failed",
@@ -69,7 +71,8 @@ app.post("/signup", async (req, res) => {
 });
 
 /* ======================
-   TEMP GET TEST (BROWSER TEST)
+   TEMP GET TEST (BROWSER)
+   /test-signup?email=test@x.com
 ====================== */
 app.get("/test-signup", async (req, res) => {
   const email = req.query.email;
@@ -83,6 +86,7 @@ app.get("/test-signup", async (req, res) => {
     .insert([{ email }]);
 
   if (error) {
+    console.error(error);
     return res.json({ error });
   }
 
@@ -94,24 +98,30 @@ app.get("/test-signup", async (req, res) => {
 });
 
 /* ======================
-   DECISION API
+   DECISION API (GAME)
 ====================== */
 app.post("/api/decision", (req, res) => {
   try {
-    const metrics = req.body;
+    const { playtime, deaths, restarts, earlyQuit } = req.body;
 
     if (
-      metrics.playtime === undefined ||
-      metrics.deaths === undefined ||
-      metrics.restarts === undefined ||
-      metrics.earlyQuit === undefined
+      playtime === undefined ||
+      deaths === undefined ||
+      restarts === undefined ||
+      earlyQuit === undefined
     ) {
       return res.status(400).json({
         error: "Invalid gameplay data",
       });
     }
 
-    const riskScore = calculateRiskScore(metrics);
+    const riskScore = calculateRiskScore({
+      playtime,
+      deaths,
+      restarts,
+      earlyQuit,
+    });
+
     const decision = getDecision(riskScore);
 
     res.json({
