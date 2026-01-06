@@ -25,9 +25,7 @@ const supabase = createClient(
    ROOT HEALTH CHECK
 ====================== */
 app.get("/", (req, res) => {
-  res.json({
-    status: "LaunchSense backend running",
-  });
+  res.json({ status: "LaunchSense backend running" });
 });
 
 /* ======================
@@ -71,7 +69,7 @@ app.post("/signup", async (req, res) => {
 });
 
 /* ======================
-   TEMP GET TEST (BROWSER)
+   TEST SIGNUP (BROWSER)
    /test-signup?email=test@x.com
 ====================== */
 app.get("/test-signup", async (req, res) => {
@@ -98,7 +96,7 @@ app.get("/test-signup", async (req, res) => {
 });
 
 /* ======================
-   DECISION API (GAME)
+   GAME DECISION API
 ====================== */
 app.post("/api/decision", (req, res) => {
   try {
@@ -132,6 +130,60 @@ app.post("/api/decision", (req, res) => {
     console.error("Decision error:", error);
     res.status(500).json({
       error: "Internal server error",
+    });
+  }
+});
+
+/* ======================
+   SESSION-BASED GAME API
+   (PHASE 3 BASE)
+====================== */
+app.post("/api/session", (req, res) => {
+  try {
+    const {
+      gameId,
+      playerId,
+      sessionId,
+      playtime,
+      deaths,
+      restarts,
+      earlyQuit,
+    } = req.body;
+
+    if (
+      !gameId ||
+      !playerId ||
+      !sessionId ||
+      playtime === undefined ||
+      deaths === undefined ||
+      restarts === undefined ||
+      earlyQuit === undefined
+    ) {
+      return res.status(400).json({
+        error: "Invalid session payload",
+      });
+    }
+
+    const riskScore = calculateRiskScore({
+      playtime,
+      deaths,
+      restarts,
+      earlyQuit,
+    });
+
+    const decision = getDecision(riskScore);
+
+    res.json({
+      gameId,
+      playerId,
+      sessionId,
+      riskScore,
+      decision,
+    });
+  } catch (err) {
+    console.error("Session error:", err);
+    res.status(500).json({
+      error: "Session processing failed",
     });
   }
 });
