@@ -1,8 +1,13 @@
 {
   "name": "launchsense-backend",
   "version": "1.0.0",
+  "description": "LaunchSense backend decision engine",
   "private": true,
   "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "start": "node server.js"
   },
