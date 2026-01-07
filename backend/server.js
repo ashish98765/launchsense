@@ -1,5 +1,5 @@
 // backend/server.js
-// LaunchSense Backend — FINAL CLEAN VERSION
+// LaunchSense Backend – FINAL CLEAN VERSION
 
 const express = require("express");
 const cors = require("cors");
@@ -10,30 +10,30 @@ const { calculateRiskScore, getDecision } = require("./decisionEngine");
 
 const app = express();
 
-/* =====================
+/* ===============================
    MIDDLEWARE
-===================== */
+================================ */
 app.use(cors());
 app.use(express.json());
 
-/* =====================
+/* ===============================
    SUPABASE SETUP
-===================== */
+================================ */
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-/* =====================
+/* ===============================
    HEALTH CHECK
-===================== */
+================================ */
 app.get("/", (req, res) => {
   res.json({ status: "LaunchSense backend running" });
 });
 
-/* =====================
+/* ===============================
    CREATE PROJECT
-===================== */
+================================ */
 app.post("/api/projects", async (req, res) => {
   try {
     const { user_id, name } = req.body;
@@ -42,9 +42,11 @@ app.post("/api/projects", async (req, res) => {
       return res.status(400).json({ error: "user_id and name required" });
     }
 
+    const game_id = "game_" + Date.now();
+
     const { data, error } = await supabase
       .from("projects")
-      .insert([{ user_id, name }])
+      .insert([{ user_id, name, game_id }])
       .select()
       .single();
 
@@ -59,9 +61,30 @@ app.post("/api/projects", async (req, res) => {
   }
 });
 
-/* =====================
-   SESSION DECISION
-===================== */
+/* ===============================
+   LIST PROJECTS (IMPORTANT)
+================================ */
+app.get("/api/projects", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("projects")
+      .select("game_id, name, created_at")
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      projects: data
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch projects" });
+  }
+});
+
+/* ===============================
+   SESSION DECISION API
+================================ */
 app.post("/api/decision", async (req, res) => {
   try {
     const {
@@ -109,7 +132,7 @@ app.post("/api/decision", async (req, res) => {
       playtime,
       deaths,
       restarts,
-      early_quit
+      earlyQuit: early_quit
     });
 
     const decision = getDecision(risk_score);
@@ -139,9 +162,9 @@ app.post("/api/decision", async (req, res) => {
   }
 });
 
-/* =====================
+/* ===============================
    GAME ANALYTICS
-===================== */
+================================ */
 app.get("/api/analytics/game/:game_id", async (req, res) => {
   try {
     const { game_id } = req.params;
@@ -155,9 +178,12 @@ app.get("/api/analytics/game/:game_id", async (req, res) => {
       return res.status(404).json({ error: "No sessions found" });
     }
 
-    let go = 0, iterate = 0, kill = 0, riskSum = 0;
+    let go = 0,
+      iterate = 0,
+      kill = 0,
+      riskSum = 0;
 
-    data.forEach(s => {
+    data.forEach((s) => {
       riskSum += s.risk_score;
       if (s.decision === "GO") go++;
       else if (s.decision === "ITERATE") iterate++;
@@ -185,9 +211,9 @@ app.get("/api/analytics/game/:game_id", async (req, res) => {
   }
 });
 
-/* =====================
+/* ===============================
    PLAYER TREND
-===================== */
+================================ */
 app.get("/api/analytics/player/:player_id/trend", async (req, res) => {
   try {
     const { player_id } = req.params;
@@ -204,16 +230,18 @@ app.get("/api/analytics/player/:player_id/trend", async (req, res) => {
     }
 
     const mid = Math.floor(data.length / 2);
-    const avg = arr =>
+
+    const avg = (arr) =>
       Math.round(arr.reduce((s, x) => s + x.risk_score, 0) / arr.length);
 
     const firstAvg = avg(data.slice(0, mid));
     const secondAvg = avg(data.slice(mid));
+
     const diff = secondAvg - firstAvg;
 
     let trend = "STABLE";
-    if (diff <= -5) trend = "IMPROVING";
-    if (diff >= 5) trend = "DEGRADING";
+    if (diff < -5) trend = "IMPROVING";
+    if (diff > 5) trend = "DEGRADING";
 
     res.json({
       player_id,
@@ -225,9 +253,9 @@ app.get("/api/analytics/player/:player_id/trend", async (req, res) => {
   }
 });
 
-/* =====================
+/* ===============================
    SERVER START
-===================== */
+================================ */
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`LaunchSense backend running on ${PORT}`);
