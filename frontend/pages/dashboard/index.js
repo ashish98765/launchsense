@@ -7,6 +7,9 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Usage limits
+  const MAX_PROJECTS = 3;
+
   useEffect(() => {
     const load = async () => {
       try {
@@ -16,8 +19,8 @@ export default function Dashboard() {
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Failed to load projects");
         setProjects(json.projects || []);
-      } catch (e) {
-        setError(e.message);
+      } catch (err) {
+        setError(err.message);
       } finally {
         setLoading(false);
       }
@@ -28,14 +31,25 @@ export default function Dashboard() {
   if (loading) return <p style={{ padding: 40 }}>Loading dashboard…</p>;
   if (error) return <p style={{ padding: 40, color: "red" }}>{error}</p>;
 
-  // EMPTY STATE — FIRST TIME USER
+  const used = projects.length;
+  const usagePercent = Math.round((used / MAX_PROJECTS) * 100);
+
+  // Dynamic color
+  const usageColor =
+    usagePercent >= 90
+      ? "#dc2626" // red
+      : usagePercent >= 70
+      ? "#d97706" // orange
+      : "#16a34a"; // green
+
+  // If no projects exist yet — onboarding screen
   if (projects.length === 0) {
     return (
       <div style={{ padding: 40, maxWidth: 900 }}>
         <h1>Welcome to LaunchSense</h1>
         <p style={{ fontSize: 18, color: "#555" }}>
-          LaunchSense helps you decide whether a game idea should be
-          <strong> launched, iterated, or killed</strong> — early.
+          LaunchSense helps you decide whether a game idea should be{" "}
+          <strong>launched, iterated, or killed</strong> — early.
         </p>
 
         <div
@@ -72,7 +86,7 @@ export default function Dashboard() {
     );
   }
 
-  // NORMAL DASHBOARD
+  // Normal dashboard view (projects exist)
   return (
     <div style={{ padding: 40, maxWidth: 900 }}>
       <h1>My Projects</h1>
@@ -80,19 +94,57 @@ export default function Dashboard() {
         Click a project to view analytics and decisions.
       </p>
 
+      {/* USAGE BAR */}
+      <div
+        style={{
+          marginTop: 20,
+          marginBottom: 30,
+          padding: 16,
+          border: "1px solid #ddd",
+          borderRadius: 10,
+          background: "#fafafa",
+        }}
+      >
+        <strong>Free Plan Usage:</strong>
+        <p style={{ color: usageColor }}>
+          {used} / {MAX_PROJECTS} projects used ({usagePercent}%)
+        </p>
+        {usagePercent >= 70 && (
+          <p style={{ color: usageColor }}>
+            ⚠️ You’re close to your free limit.
+            {usagePercent >= 90 ? (
+              <>
+                {" "}
+                <br />
+                <a href="/pricing">Upgrade to continue →</a>
+              </>
+            ) : (
+              " Keep growing — consider upgrading soon."
+            )}
+          </p>
+        )}
+      </div>
+
+      {/* CREATE PROJECT BUTTON */}
       <button
-        onClick={() => router.push("/new")}
+        onClick={() =>
+          used >= MAX_PROJECTS
+            ? router.push("/pricing")
+            : router.push("/new")
+        }
         style={{
           marginBottom: 30,
           padding: "10px 16px",
           background: "#000",
           color: "#fff",
+          border: "none",
           cursor: "pointer",
         }}
       >
         + Create New Project
       </button>
 
+      {/* PROJECT LIST */}
       {projects.map((p) => (
         <div
           key={p.game_id}
@@ -107,12 +159,14 @@ export default function Dashboard() {
           <p>
             <strong>Game ID:</strong> <code>{p.game_id}</code>
           </p>
-
           <button
             onClick={() => router.push(`/dashboard/${p.game_id}`)}
             style={{
               marginTop: 10,
               padding: "8px 14px",
+              background: "#000",
+              color: "#fff",
+              border: "none",
               cursor: "pointer",
             }}
           >
