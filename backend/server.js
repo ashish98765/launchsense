@@ -1,4 +1,4 @@
-// LaunchSense Backend — API Key Secured (FINAL)
+// LaunchSense Backend – API Key Secured (FINAL STABLE)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -12,13 +12,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ==================== SUPABASE ====================
+// ================= SUPABASE =================
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// ==================== HELPERS ====================
+// ================= HELPERS =================
 function generateApiKey() {
   return "ls_" + crypto.randomBytes(24).toString("hex");
 }
@@ -37,7 +37,7 @@ async function verifyApiKey(game_id, api_key) {
   return !!data;
 }
 
-// ==================== MIDDLEWARE ====================
+// ================= MIDDLEWARE =================
 async function apiKeyMiddleware(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   const gameId = req.headers["x-game-id"];
@@ -46,16 +46,15 @@ async function apiKeyMiddleware(req, res, next) {
   if (!valid) {
     return res.status(401).json({ error: "Invalid or missing API key" });
   }
-
   next();
 }
 
-// ==================== HEALTH ====================
+// ================= HEALTH =================
 app.get("/", (req, res) => {
   res.json({ status: "LaunchSense backend running" });
 });
 
-// ==================== CREATE PROJECT ====================
+// ================= CREATE PROJECT =================
 app.post("/api/projects", async (req, res) => {
   try {
     const { user_id, name } = req.body;
@@ -90,7 +89,7 @@ app.post("/api/projects", async (req, res) => {
   }
 });
 
-// ==================== LIST PROJECTS ====================
+// ================= LIST PROJECTS =================
 app.get("/api/projects", async (req, res) => {
   try {
     const { data } = await supabase
@@ -104,7 +103,53 @@ app.get("/api/projects", async (req, res) => {
   }
 });
 
-// ==================== DECISION API (PROTECTED) ====================
+// ================= REVOKE API KEY =================
+app.post("/api/api-keys/revoke", async (req, res) => {
+  try {
+    const { game_id } = req.body;
+    if (!game_id) {
+      return res.status(400).json({ error: "game_id required" });
+    }
+
+    await supabase
+      .from("api_keys")
+      .update({ revoked: true })
+      .eq("game_id", game_id);
+
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: "Failed to revoke API key" });
+  }
+});
+
+// ================= REGENERATE API KEY =================
+app.post("/api/api-keys/regenerate", async (req, res) => {
+  try {
+    const { game_id } = req.body;
+    if (!game_id) {
+      return res.status(400).json({ error: "game_id required" });
+    }
+
+    await supabase
+      .from("api_keys")
+      .update({ revoked: true })
+      .eq("game_id", game_id);
+
+    const newKey = generateApiKey();
+
+    await supabase.from("api_keys").insert({
+      game_id,
+      api_key: newKey,
+      revoked: false,
+    });
+
+    res.json({ success: true, api_key: newKey });
+  } catch {
+    res.status(500).json({ error: "Failed to regenerate API key" });
+  }
+});
+
+// ================= DECISION API (PROTECTED) =================
 app.post("/api/decision", apiKeyMiddleware, async (req, res) => {
   try {
     const {
@@ -142,17 +187,13 @@ app.post("/api/decision", apiKeyMiddleware, async (req, res) => {
       decision,
     });
 
-    res.json({
-      success: true,
-      risk_score,
-      decision,
-    });
+    res.json({ success: true, risk_score, decision });
   } catch {
     res.status(500).json({ error: "Decision API failed" });
   }
 });
 
-// ==================== ANALYTICS (PROTECTED) ====================
+// ================= ANALYTICS (PROTECTED) =================
 app.get(
   "/api/analytics/game/:game_id",
   apiKeyMiddleware,
@@ -211,8 +252,8 @@ app.get(
   }
 );
 
-// ==================== START ====================
+// ================= START =================
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log("LaunchSense backend running on", PORT);
-});
+app.listen(PORT, () =>
+  console.log("LaunchSense backend running on", PORT)
+);
