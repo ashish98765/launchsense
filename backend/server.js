@@ -1,4 +1,4 @@
-// LaunchSense Backend – FINAL STABLE (with DEMO)
+// LaunchSense Backend — FINAL WORKING VERSION
 
 const crypto = require("crypto");
 const express = require("express");
@@ -26,7 +26,7 @@ function generateApiKey() {
 async function verifyApiKey(game_id, api_key) {
   if (!game_id || !api_key) return false;
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("api_keys")
     .select("id")
     .eq("game_id", game_id)
@@ -34,6 +34,7 @@ async function verifyApiKey(game_id, api_key) {
     .eq("revoked", false)
     .maybeSingle();
 
+  if (error) return false;
   return !!data;
 }
 
@@ -64,7 +65,7 @@ app.get("/api/demo/analytics", (req, res) => {
     go_percent: 57,
     iterate_percent: 33,
     kill_percent: 10,
-    health: "GO"
+    health: "GO",
   });
 });
 
@@ -72,6 +73,7 @@ app.get("/api/demo/analytics", (req, res) => {
 app.post("/api/projects", async (req, res) => {
   try {
     const { user_id, name } = req.body;
+
     if (!user_id || !name) {
       return res.status(400).json({ error: "user_id and name required" });
     }
@@ -79,83 +81,55 @@ app.post("/api/projects", async (req, res) => {
     const game_id = "game_" + Date.now();
     const api_key = generateApiKey();
 
-    const { data, error } = await supabase
+    const { data: project, error: projectError } = await supabase
       .from("projects")
       .insert([{ user_id, name, game_id }])
       .select()
       .single();
 
-    if (error) throw error;
+    if (projectError) {
+      console.error("PROJECT INSERT ERROR:", projectError);
+      throw projectError;
+    }
 
-    await supabase.from("api_keys").insert({
+    const { error: keyError } = await supabase.from("api_keys").insert({
       game_id,
       api_key,
-      revoked: false
+      revoked: false,
     });
 
-    res.json({ success: true, project: data, api_key });
-  } catch {
-    res.status(500).json({ error: "Project creation failed" });
+    if (keyError) {
+      console.error("API KEY INSERT ERROR:", keyError);
+      throw keyError;
+    }
+
+    res.json({
+      success: true,
+      project,
+      api_key,
+    });
+  } catch (e) {
+    console.error("CREATE PROJECT FAILED:", e);
+    res.status(500).json({
+      error: "Project creation failed",
+      details: e.message || e,
+    });
   }
 });
 
 // ================= LIST PROJECTS =================
 app.get("/api/projects", async (req, res) => {
   try {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("projects")
       .select("game_id, name, created_at")
       .order("created_at", { ascending: false });
 
+    if (error) throw error;
+
     res.json({ success: true, projects: data });
-  } catch {
+  } catch (e) {
     res.status(500).json({ error: "Failed to fetch projects" });
-  }
-});
-
-// ================= REVOKE API KEY =================
-app.post("/api/api-keys/revoke", async (req, res) => {
-  try {
-    const { game_id } = req.body;
-    if (!game_id) {
-      return res.status(400).json({ error: "game_id required" });
-    }
-
-    await supabase
-      .from("api_keys")
-      .update({ revoked: true })
-      .eq("game_id", game_id);
-
-    res.json({ success: true });
-  } catch {
-    res.status(500).json({ error: "Failed to revoke API key" });
-  }
-});
-
-// ================= REGENERATE API KEY =================
-app.post("/api/api-keys/regenerate", async (req, res) => {
-  try {
-    const { game_id } = req.body;
-    if (!game_id) {
-      return res.status(400).json({ error: "game_id required" });
-    }
-
-    await supabase
-      .from("api_keys")
-      .update({ revoked: true })
-      .eq("game_id", game_id);
-
-    const newKey = generateApiKey();
-
-    await supabase.from("api_keys").insert({
-      game_id,
-      api_key: newKey,
-      revoked: false
-    });
-
-    res.json({ success: true, api_key: newKey });
-  } catch {
-    res.status(500).json({ error: "Failed to regenerate API key" });
   }
 });
 
@@ -169,7 +143,7 @@ app.post("/api/decision", apiKeyMiddleware, async (req, res) => {
       playtime,
       deaths,
       restarts,
-      early_quit
+      early_quit,
     } = req.body;
 
     if (!game_id || !player_id || !session_id) {
@@ -180,7 +154,7 @@ app.post("/api/decision", apiKeyMiddleware, async (req, res) => {
       playtime,
       deaths,
       restarts,
-      earlyQuit: early_quit
+      earlyQuit: early_quit,
     });
 
     const decision = getDecision(risk_score);
@@ -194,11 +168,11 @@ app.post("/api/decision", apiKeyMiddleware, async (req, res) => {
       restarts,
       early_quit,
       risk_score,
-      decision
+      decision,
     });
 
     res.json({ success: true, risk_score, decision });
-  } catch {
+  } catch (e) {
     res.status(500).json({ error: "Decision API failed" });
   }
 });
@@ -224,7 +198,7 @@ app.get(
           iterate_percent: 0,
           kill_percent: 0,
           average_risk: 0,
-          health: "ITERATE"
+          health: "ITERATE",
         });
       }
 
@@ -233,7 +207,7 @@ app.get(
         kill = 0,
         riskSum = 0;
 
-      data.forEach(s => {
+      data.forEach((s) => {
         riskSum += s.risk_score;
         if (s.decision === "GO") go++;
         else if (s.decision === "ITERATE") iterate++;
@@ -254,16 +228,16 @@ app.get(
         iterate_percent: Math.round((iterate / total) * 100),
         kill_percent: Math.round((kill / total) * 100),
         average_risk: avgRisk,
-        health
+        health,
       });
-    } catch {
+    } catch (e) {
       res.status(500).json({ error: "Analytics failed" });
     }
   }
 );
 
-// ================= START SERVER =================
+// ================= START =================
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log("LaunchSense backend running on", PORT);
-});
+app.listen(PORT, () =>
+  console.log("LaunchSense backend running on", PORT)
+);
