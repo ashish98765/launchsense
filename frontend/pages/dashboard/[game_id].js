@@ -1,91 +1,97 @@
 import { useRouter } from "next/router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-export default function Dashboard() {
+export default function GameDashboard() {
   const router = useRouter();
   const { game_id } = router.query;
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState("");
 
-  if (!game_id) return null;
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const sendTestEvent = async () => {
-    setLoading(true);
-    setMsg("");
+  useEffect(() => {
+    if (!game_id) return;
 
-    try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/decision`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            game_id,
-            player_id: "test_player",
-            session_id: "test_session_" + Date.now(),
-            playtime: 300,
-            deaths: 3,
-            restarts: 1,
-            early_quit: false,
-          }),
-        }
-      );
+    const fetchAnalytics = async () => {
+      try {
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/analytics/game/${game_id}`
+        );
 
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Test failed");
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Analytics failed");
 
-      setMsg(
-        `Risk: ${json.risk_score} | Decision: ${json.decision}`
-      );
-    } catch (err) {
-      setMsg(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+        setData(json);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAnalytics();
+  }, [game_id]);
+
+  if (loading) return <p style={{ padding: 40 }}>Analyzing data…</p>;
+  if (error) return <p style={{ padding: 40, color: "red" }}>{error}</p>;
+
+  const decisionColor =
+    data.health === "GO"
+      ? "green"
+      : data.health === "KILL"
+      ? "red"
+      : "orange";
 
   return (
     <div style={{ padding: 40, maxWidth: 700 }}>
-      <h1>Project Dashboard</h1>
-
+      <h1>Game Analytics</h1>
       <p>
-        <strong>Game ID:</strong> <code>{game_id}</code>
+        <strong>Game ID:</strong> {game_id}
       </p>
 
       <hr />
 
-      <h3>API Endpoint</h3>
-      <code>
-        POST {process.env.NEXT_PUBLIC_API_BASE_URL}/api/decision
-      </code>
+      <p>
+        <strong>Total Sessions:</strong> {data.total_sessions}
+      </p>
+      <p>
+        <strong>Average Risk:</strong> {data.average_risk}/100
+      </p>
 
-      <h3>Example Payload</h3>
-      <pre style={{ background: "#f4f4f4", padding: 10 }}>
-{JSON.stringify(
-  {
-    game_id,
-    player_id: "player_123",
-    session_id: "session_001",
-    playtime: 420,
-    deaths: 6,
-    restarts: 2,
-    early_quit: false,
-  },
-  null,
-  2
-)}
-      </pre>
+      <p>
+        <strong>GO %:</strong> {data.go_percent}%
+      </p>
+      <p>
+        <strong>ITERATE %:</strong> {data.iterate_percent}%
+      </p>
+      <p>
+        <strong>KILL %:</strong> {data.kill_percent}%
+      </p>
 
-      <button onClick={sendTestEvent} disabled={loading}>
-        {loading ? "Sending..." : "Send Test Session"}
-      </button>
+      <h2 style={{ color: decisionColor, marginTop: 30 }}>
+        Decision: {data.health}
+      </h2>
 
-      {msg && <p style={{ marginTop: 10 }}>{msg}</p>}
+      <p style={{ marginTop: 10 }}>
+        {data.health === "GO" &&
+          "Strong early signals detected. Safe to move forward."}
+        {data.health === "ITERATE" &&
+          "Mixed signals. Fix fundamentals before scaling."}
+        {data.health === "KILL" &&
+          "High risk pattern. Stop and rethink the idea."}
+      </p>
 
-      <hr />
-
-      <button onClick={() => router.push(`/result?game_id=${game_id}`)}>
-        View Analysis
+      <button
+        onClick={() => router.push("/dashboard")}
+        style={{
+          marginTop: 30,
+          padding: "10px 16px",
+          background: "#eee",
+          border: "1px solid #ccc",
+          cursor: "pointer",
+        }}
+      >
+        ← Back to Dashboard
       </button>
     </div>
   );
