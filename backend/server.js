@@ -1,5 +1,4 @@
-// backend/server.js
-// LaunchSense Backend – FINAL STABLE VERSION
+// LaunchSense Backend - FINAL CLEAN STABLE
 
 const express = require("express");
 const cors = require("cors");
@@ -12,24 +11,24 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ======================
+// =======================
 // SUPABASE
-// ======================
+// =======================
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// ======================
+// =======================
 // HEALTH
-// ======================
+// =======================
 app.get("/", (req, res) => {
   res.json({ status: "LaunchSense backend running" });
 });
 
-// ======================
+// =======================
 // CREATE PROJECT
-// ======================
+// =======================
 app.post("/api/projects", async (req, res) => {
   try {
     const { user_id, name } = req.body;
@@ -53,9 +52,9 @@ app.post("/api/projects", async (req, res) => {
   }
 });
 
-// ======================
+// =======================
 // LIST PROJECTS
-// ======================
+// =======================
 app.get("/api/projects", async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -64,16 +63,15 @@ app.get("/api/projects", async (req, res) => {
       .order("created_at", { ascending: false });
 
     if (error) throw error;
-
     res.json({ success: true, projects: data });
   } catch {
     res.status(500).json({ error: "Failed to fetch projects" });
   }
 });
 
-// ======================
-// SESSION DECISION
-// ======================
+// =======================
+// SESSION DECISION API
+// =======================
 app.post("/api/decision", async (req, res) => {
   try {
     const {
@@ -110,9 +108,9 @@ app.post("/api/decision", async (req, res) => {
     if (existing) {
       return res.json({
         success: true,
+        duplicate: true,
         risk_score: existing.risk_score,
         decision: existing.decision,
-        duplicate: true,
       });
     }
 
@@ -120,7 +118,7 @@ app.post("/api/decision", async (req, res) => {
       playtime,
       deaths,
       restarts,
-      early_quit,
+      earlyQuit: early_quit,
     });
 
     const decision = getDecision(risk_score);
@@ -141,18 +139,18 @@ app.post("/api/decision", async (req, res) => {
 
     res.json({
       success: true,
+      duplicate: false,
       risk_score,
       decision,
-      duplicate: false,
     });
   } catch {
     res.status(500).json({ error: "Decision API failed" });
   }
 });
 
-// ======================
-// GAME ANALYTICS
-// ======================
+// =======================
+// REAL GAME ANALYTICS
+// =======================
 app.get("/api/analytics/game/:game_id", async (req, res) => {
   try {
     const { game_id } = req.params;
@@ -207,42 +205,50 @@ app.get("/api/analytics/game/:game_id", async (req, res) => {
   }
 });
 
-// ======================
-// DEMO DATA
-// ======================
-app.post("/api/demo/:game_id", async (req, res) => {
-  try {
-    const { game_id } = req.params;
+// =======================
+// DEMO ANALYTICS (NO DB)
+// =======================
+app.get("/api/demo/analytics", (req, res) => {
+  const demo = [
+    { decision: "GO", risk_score: 28 },
+    { decision: "ITERATE", risk_score: 52 },
+    { decision: "ITERATE", risk_score: 48 },
+    { decision: "KILL", risk_score: 78 },
+    { decision: "ITERATE", risk_score: 55 },
+  ];
 
-    const demo = [
-      { playtime: 120, deaths: 5, restarts: 2, early_quit: true },
-      { playtime: 280, deaths: 2, restarts: 1, early_quit: false },
-      { playtime: 420, deaths: 1, restarts: 0, early_quit: false },
-      { playtime: 190, deaths: 4, restarts: 3, early_quit: true },
-      { playtime: 360, deaths: 2, restarts: 1, early_quit: false },
-    ];
+  let go = 0,
+    iterate = 0,
+    kill = 0,
+    riskSum = 0;
 
-    for (let i = 0; i < demo.length; i++) {
-      const risk_score = calculateRiskScore(demo[i]);
-      const decision = getDecision(risk_score);
+  demo.forEach((s) => {
+    riskSum += s.risk_score;
+    if (s.decision === "GO") go++;
+    else if (s.decision === "ITERATE") iterate++;
+    else kill++;
+  });
 
-      await supabase.from("game_sessions").insert({
-        game_id,
-        player_id: `demo_${i}`,
-        session_id: `demo_${Date.now()}_${i}`,
-        ...demo[i],
-        risk_score,
-        decision,
-      });
-    }
+  const total = demo.length;
+  const avgRisk = Math.round(riskSum / total);
 
-    res.json({ success: true });
-  } catch {
-    res.status(500).json({ error: "Demo failed" });
-  }
+  let health = "ITERATE";
+  if (go / total > 0.6 && avgRisk < 40) health = "GO";
+  if (kill / total > 0.3 && avgRisk > 65) health = "KILL";
+
+  res.json({
+    demo: true,
+    project_name: "Demo Game",
+    total_sessions: total,
+    go_percent: Math.round((go / total) * 100),
+    iterate_percent: Math.round((iterate / total) * 100),
+    kill_percent: Math.round((kill / total) * 100),
+    average_risk: avgRisk,
+    health,
+  });
 });
 
-// ======================
+// =======================
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () =>
   console.log("LaunchSense backend running on", PORT)
