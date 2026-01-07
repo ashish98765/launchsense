@@ -1,4 +1,4 @@
-// LaunchSense Backend – API Key Secured (FINAL STABLE)
+// LaunchSense Backend – FINAL STABLE (with DEMO)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -54,6 +54,20 @@ app.get("/", (req, res) => {
   res.json({ status: "LaunchSense backend running" });
 });
 
+// ================= DEMO ANALYTICS (PUBLIC) =================
+app.get("/api/demo/analytics", (req, res) => {
+  res.json({
+    demo: true,
+    game_id: "demo_game_001",
+    total_sessions: 42,
+    average_risk: 38,
+    go_percent: 57,
+    iterate_percent: 33,
+    kill_percent: 10,
+    health: "GO"
+  });
+});
+
 // ================= CREATE PROJECT =================
 app.post("/api/projects", async (req, res) => {
   try {
@@ -76,14 +90,10 @@ app.post("/api/projects", async (req, res) => {
     await supabase.from("api_keys").insert({
       game_id,
       api_key,
-      revoked: false,
+      revoked: false
     });
 
-    res.json({
-      success: true,
-      project: data,
-      api_key,
-    });
+    res.json({ success: true, project: data, api_key });
   } catch {
     res.status(500).json({ error: "Project creation failed" });
   }
@@ -140,7 +150,7 @@ app.post("/api/api-keys/regenerate", async (req, res) => {
     await supabase.from("api_keys").insert({
       game_id,
       api_key: newKey,
-      revoked: false,
+      revoked: false
     });
 
     res.json({ success: true, api_key: newKey });
@@ -159,7 +169,7 @@ app.post("/api/decision", apiKeyMiddleware, async (req, res) => {
       playtime,
       deaths,
       restarts,
-      early_quit,
+      early_quit
     } = req.body;
 
     if (!game_id || !player_id || !session_id) {
@@ -170,7 +180,7 @@ app.post("/api/decision", apiKeyMiddleware, async (req, res) => {
       playtime,
       deaths,
       restarts,
-      earlyQuit: early_quit,
+      earlyQuit: early_quit
     });
 
     const decision = getDecision(risk_score);
@@ -184,7 +194,7 @@ app.post("/api/decision", apiKeyMiddleware, async (req, res) => {
       restarts,
       early_quit,
       risk_score,
-      decision,
+      decision
     });
 
     res.json({ success: true, risk_score, decision });
@@ -214,7 +224,7 @@ app.get(
           iterate_percent: 0,
           kill_percent: 0,
           average_risk: 0,
-          health: "ITERATE",
+          health: "ITERATE"
         });
       }
 
@@ -223,7 +233,7 @@ app.get(
         kill = 0,
         riskSum = 0;
 
-      data.forEach((s) => {
+      data.forEach(s => {
         riskSum += s.risk_score;
         if (s.decision === "GO") go++;
         else if (s.decision === "ITERATE") iterate++;
@@ -244,7 +254,7 @@ app.get(
         iterate_percent: Math.round((iterate / total) * 100),
         kill_percent: Math.round((kill / total) * 100),
         average_risk: avgRisk,
-        health,
+        health
       });
     } catch {
       res.status(500).json({ error: "Analytics failed" });
@@ -252,8 +262,8 @@ app.get(
   }
 );
 
-// ================= START =================
+// ================= START SERVER =================
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () =>
-  console.log("LaunchSense backend running on", PORT)
-);
+app.listen(PORT, () => {
+  console.log("LaunchSense backend running on", PORT);
+});
