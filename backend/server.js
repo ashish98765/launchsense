@@ -78,7 +78,7 @@ app.post("/api/decision", async (req, res) => {
       return res.status(400).json({ error: "Invalid data types" });
     }
 
-    // Duplicate check
+    // duplicate session check
     const { data: existing } = await supabase
       .from("game_sessions")
       .select("risk_score, decision")
@@ -105,17 +105,19 @@ app.post("/api/decision", async (req, res) => {
 
     const decision = getDecision(risk_score);
 
-    await supabase.from("game_sessions").insert([{
-      game_id,
-      player_id,
-      session_id,
-      playtime,
-      deaths,
-      restarts,
-      early_quit,
-      risk_score,
-      decision
-    }]);
+    await supabase.from("game_sessions").insert([
+      {
+        game_id,
+        player_id,
+        session_id,
+        playtime,
+        deaths,
+        restarts,
+        early_quit,
+        risk_score,
+        decision
+      }
+    ]);
 
     res.json({
       success: true,
@@ -123,7 +125,6 @@ app.post("/api/decision", async (req, res) => {
       decision,
       duplicate: false
     });
-
   } catch (err) {
     res.status(500).json({ error: "Decision API failed" });
   }
@@ -154,21 +155,22 @@ app.get("/api/analytics/game/:game_id", async (req, res) => {
       else if (s.decision === "KILL") kill++;
     });
 
-    const avgRisk = Math.round(riskSum / data.length);
+    const total = data.length;
+    const avgRisk = Math.round(riskSum / total);
+
     let health = "STABLE";
-    if (go / data.length > 0.6 && avgRisk < 40) health = "GOOD";
-    if (kill / data.length > 0.3 && avgRisk > 65) health = "BAD";
+    if (go / total > 0.6 && avgRisk < 40) health = "GOOD";
+    if (kill / total > 0.3 && avgRisk > 65) health = "BAD";
 
     res.json({
       game_id,
-      total_sessions: data.length,
-      go_percent: Math.round((go / data.length) * 100),
-      iterate_percent: Math.round((iterate / data.length) * 100),
-      kill_percent: Math.round((kill / data.length) * 100),
+      total_sessions: total,
+      go_percent: Math.round((go / total) * 100),
+      iterate_percent: Math.round((iterate / total) * 100),
+      kill_percent: Math.round((kill / total) * 100),
       average_risk: avgRisk,
       health
     });
-
   } catch (err) {
     res.status(500).json({ error: "Analytics failed" });
   }
@@ -217,14 +219,13 @@ app.get("/api/analytics/player/:player_id", async (req, res) => {
       kill,
       player_type
     });
-
   } catch (err) {
     res.status(500).json({ error: "Player analytics failed" });
   }
 });
 
 /* =======================
-   STEP 31 — PLAYER RISK TREND API
+   STEP 31 — PLAYER RISK TREND
 ======================= */
 app.get("/api/analytics/player/:player_id/trend", async (req, res) => {
   try {
@@ -256,8 +257,8 @@ app.get("/api/analytics/player/:player_id/trend", async (req, res) => {
     else if (diff >= 5) trend = "DEGRADING";
 
     let confidence = "LOW";
-    if (Math.abs(diff) >= 10) confidence = "HIGH";
-    else if (Math.abs(diff) >= 5) confidence = "MEDIUM";
+    if (Math.abs(diff) > 10) confidence = "HIGH";
+    else if (Math.abs(diff) > 5) confidence = "MEDIUM";
 
     res.json({
       player_id,
@@ -265,9 +266,62 @@ app.get("/api/analytics/player/:player_id/trend", async (req, res) => {
       risk_change: diff,
       confidence
     });
-
   } catch (err) {
     res.status(500).json({ error: "Trend analysis failed" });
+  }
+});
+
+/* =======================
+   STEP 32 — PLAYER RISK VELOCITY
+======================= */
+app.get("/api/analytics/player/:player_id/velocity", async (req, res) => {
+  try {
+    const { player_id } = req.params;
+
+    const { data } = await supabase
+      .from("game_sessions")
+      .select("risk_score, created_at")
+      .eq("player_id", player_id)
+      .order("created_at", { ascending: true })
+      .limit(10);
+
+    if (!data || data.length < 4) {
+      return res.status(400).json({ error: "Not enough data" });
+    }
+
+    const risks = data.map(d => d.risk_score);
+    const first = risks[0];
+    const last = risks[risks.length - 1];
+
+    const velocity = Math.round((last - first) / (risks.length - 1));
+    const avgRisk = Math.round(risks.reduce((a, b) => a + b, 0) / risks.length);
+
+    const variance =
+      risks.reduce((s, r) => s + Math.pow(r - avgRisk, 2), 0) / risks.length;
+    const volatility = Math.round(Math.sqrt(variance));
+
+    let direction = "STABLE";
+    if (velocity > 2) direction = "INCREASING";
+    else if (velocity < -2) direction = "DECREASING";
+
+    let speed = "SLOW";
+    if (Math.abs(velocity) >= 6) speed = "FAST";
+    else if (Math.abs(velocity) >= 3) speed = "MEDIUM";
+
+    const alert = speed === "FAST" && avgRisk > 60;
+
+    res.json({
+      player_id,
+      sessions_analyzed: risks.length,
+      average_risk: avgRisk,
+      velocity,
+      direction,
+      speed,
+      volatility,
+      alert
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Velocity analysis failed" });
   }
 });
 
@@ -276,5 +330,5 @@ app.get("/api/analytics/player/:player_id/trend", async (req, res) => {
 ======================= */
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`LaunchSense backend running on port ${PORT}`);
+  console.log(`LaunchSense backend running on ${PORT}`);
 });
