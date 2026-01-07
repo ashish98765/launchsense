@@ -1,7 +1,7 @@
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 
-export default function GameDashboard() {
+export default function GameAnalytics() {
   const router = useRouter();
   const { game_id } = router.query;
 
@@ -12,106 +12,151 @@ export default function GameDashboard() {
   useEffect(() => {
     if (!game_id) return;
 
-    const fetchAnalytics = async () => {
-      try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/analytics/game/${game_id}`
-        );
-        const json = await res.json();
+    fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/api/analytics/game/${game_id}`)
+      .then((res) => res.json())
+      .then((json) => {
         setData(json);
-      } catch {
-        setError("Failed to load analytics");
-      } finally {
         setLoading(false);
-      }
-    };
-
-    fetchAnalytics();
+      })
+      .catch(() => {
+        setError("Failed to load analytics");
+        setLoading(false);
+      });
   }, [game_id]);
 
-  if (loading) return <p style={{ padding: 40 }}>Analyzing data…</p>;
-  if (error) return <p style={{ padding: 40, color: "red" }}>{error}</p>;
+  if (loading) return <p style={page}>Analyzing player behavior…</p>;
+  if (error) return <p style={{ ...page, color: "red" }}>{error}</p>;
 
-  const color =
+  const decisionColor =
     data.health === "GO"
-      ? "green"
+      ? "#16a34a"
       : data.health === "KILL"
-      ? "red"
-      : "orange";
+      ? "#dc2626"
+      : "#d97706";
+
+  // CONFIDENCE LOGIC
+  let confidence = "Low";
+  let confidenceNote =
+    "Very small sample size. Treat this decision as directional.";
+
+  if (data.total_sessions >= 20) {
+    confidence = "Medium";
+    confidenceNote =
+      "Moderate sample size. Decision is reasonably reliable.";
+  }
+
+  if (data.total_sessions >= 50) {
+    confidence = "High";
+    confidenceNote =
+      "Large enough sample size. Decision is statistically stable.";
+  }
+
+  const confidenceColor =
+    confidence === "High"
+      ? "#16a34a"
+      : confidence === "Medium"
+      ? "#d97706"
+      : "#dc2626";
 
   return (
-    <div style={{ padding: 40, maxWidth: 720 }}>
-      <h1>Game Analytics</h1>
-      <p>
-        <strong>Game ID:</strong> {game_id}
-      </p>
-      <hr />
-
-      {data.total_sessions === 0 && (
-        <div style={{ border: "1px dashed #aaa", padding: 20 }}>
-          <p>No data yet. Run a demo to see how LaunchSense works.</p>
-          <button
-            onClick={async () => {
-              await fetch(
-                `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/demo/${game_id}`,
-                { method: "POST" }
-              );
-              location.reload();
-            }}
-            style={{
-              padding: "10px 16px",
-              background: "black",
-              color: "white",
-              border: "none",
-              cursor: "pointer",
-            }}
-          >
-            Run Demo Analysis
-          </button>
-        </div>
-      )}
-
-      <p>
-        <strong>Total Sessions:</strong> {data.total_sessions}
-      </p>
-      <p>
-        <strong>Average Risk:</strong> {data.average_risk}/100
-      </p>
-      <p>
-        <strong>GO %:</strong> {data.go_percent}%
-      </p>
-      <p>
-        <strong>ITERATE %:</strong> {data.iterate_percent}%
-      </p>
-      <p>
-        <strong>KILL %:</strong> {data.kill_percent}%
+    <div style={page}>
+      <h1>Game Decision Report</h1>
+      <p style={{ color: "#666" }}>
+        Game ID: <code>{game_id}</code>
       </p>
 
-      <h2 style={{ color, marginTop: 30 }}>
-        Decision: {data.health}
-      </h2>
+      {/* FINAL DECISION */}
+      <div
+        style={{
+          border: `3px solid ${decisionColor}`,
+          padding: 24,
+          borderRadius: 12,
+          marginTop: 30,
+        }}
+      >
+        <h2 style={{ color: decisionColor }}>
+          FINAL DECISION: {data.health}
+        </h2>
 
-      <p>
-        {data.health === "GO" &&
-          "Strong early signals detected. Safe to move forward."}
-        {data.health === "ITERATE" &&
-          "Mixed signals. Fix fundamentals before scaling."}
-        {data.health === "KILL" &&
-          "High risk pattern. Stop and rethink the idea."}
-      </p>
+        <p style={{ fontSize: 18, marginTop: 10 }}>
+          {data.health === "GO" &&
+            "Players are engaging well. Core loop shows promise."}
+          {data.health === "ITERATE" &&
+            "Mixed signals detected. Fix friction points before scaling."}
+          {data.health === "KILL" &&
+            "High early risk pattern detected. Continuing may waste resources."}
+        </p>
+      </div>
+
+      {/* CONFIDENCE */}
+      <div
+        style={{
+          marginTop: 24,
+          padding: 20,
+          border: "1px solid #ddd",
+          borderRadius: 10,
+          background: "#fafafa",
+        }}
+      >
+        <h3>
+          Decision Confidence:{" "}
+          <span style={{ color: confidenceColor }}>{confidence}</span>
+        </h3>
+        <p style={{ marginTop: 8 }}>{confidenceNote}</p>
+        <p style={{ fontSize: 14, color: "#666" }}>
+          Based on {data.total_sessions} session(s).
+        </p>
+      </div>
+
+      {/* METRICS */}
+      <div style={{ display: "flex", gap: 20, marginTop: 30 }}>
+        <Metric label="Total Sessions" value={data.total_sessions} />
+        <Metric label="Average Risk" value={`${data.average_risk}/100`} />
+      </div>
+
+      <div style={{ display: "flex", gap: 20, marginTop: 20 }}>
+        <Metric label="GO %" value={`${data.go_percent}%`} />
+        <Metric label="ITERATE %" value={`${data.iterate_percent}%`} />
+        <Metric label="KILL %" value={`${data.kill_percent}%`} />
+      </div>
 
       <button
         onClick={() => router.push("/dashboard")}
-        style={{
-          marginTop: 30,
-          padding: "10px 16px",
-          background: "#eee",
-          border: "1px solid #ccc",
-          cursor: "pointer",
-        }}
+        style={backBtn}
       >
-        Back to Dashboard
+        ← Back to Dashboard
       </button>
     </div>
   );
 }
+
+function Metric({ label, value }) {
+  return (
+    <div
+      style={{
+        flex: 1,
+        padding: 16,
+        border: "1px solid #ddd",
+        borderRadius: 8,
+        textAlign: "center",
+      }}
+    >
+      <div style={{ fontSize: 14, color: "#666" }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: "bold" }}>{value}</div>
+    </div>
+  );
+}
+
+const page = {
+  padding: 40,
+  maxWidth: 900,
+};
+
+const backBtn = {
+  marginTop: 30,
+  padding: "10px 16px",
+  background: "#000",
+  color: "#fff",
+  border: "none",
+  cursor: "pointer",
+};
