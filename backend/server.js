@@ -1,6 +1,5 @@
-// ===============================
-// LaunchSense Backend - FINAL
-// ===============================
+// backend/server.js
+// LaunchSense Backend — FINAL CLEAN VERSION
 
 const express = require("express");
 const cors = require("cors");
@@ -10,68 +9,59 @@ const { createClient } = require("@supabase/supabase-js");
 const { calculateRiskScore, getDecision } = require("./decisionEngine");
 
 const app = express();
+
+/* =====================
+   MIDDLEWARE
+===================== */
 app.use(cors());
 app.use(express.json());
 
-// ===============================
-// SUPABASE SETUP
-// ===============================
+/* =====================
+   SUPABASE SETUP
+===================== */
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// ===============================
-// HEALTH CHECK
-// ===============================
+/* =====================
+   HEALTH CHECK
+===================== */
 app.get("/", (req, res) => {
   res.json({ status: "LaunchSense backend running" });
 });
 
-// ===============================
-// SIGNUP
-// ===============================
-app.post("/signup", async (req, res) => {
+/* =====================
+   CREATE PROJECT
+===================== */
+app.post("/api/projects", async (req, res) => {
   try {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ error: "Email required" });
+    const { user_id, name } = req.body;
 
-    const { error } = await supabase
-      .from("launchsense")
-      .insert([{ email }]);
+    if (!user_id || !name) {
+      return res.status(400).json({ error: "user_id and name required" });
+    }
 
-    if (error) throw error;
-    res.json({ success: true });
-  } catch {
-    res.status(500).json({ error: "Signup failed" });
-  }
-});
-
-// ===============================
-// CREATE PROJECT
-// ===============================
-app.post("/api/project", async (req, res) => {
-  try {
-    const { name } = req.body;
-    if (!name) return res.status(400).json({ error: "Project name required" });
-
-    const game_id = "game_" + Date.now();
-
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("projects")
-      .insert([{ game_id, name }]);
+      .insert([{ user_id, name }])
+      .select()
+      .single();
 
     if (error) throw error;
 
-    res.json({ success: true, game_id });
-  } catch {
+    res.json({
+      success: true,
+      project: data
+    });
+  } catch (err) {
     res.status(500).json({ error: "Project creation failed" });
   }
 });
 
-// ===============================
-// SESSION DECISION API
-// ===============================
+/* =====================
+   SESSION DECISION
+===================== */
 app.post("/api/decision", async (req, res) => {
   try {
     const {
@@ -84,8 +74,9 @@ app.post("/api/decision", async (req, res) => {
       early_quit
     } = req.body;
 
-    if (!game_id || !player_id || !session_id)
+    if (!game_id || !player_id || !session_id) {
       return res.status(400).json({ error: "Missing identifiers" });
+    }
 
     if (
       typeof playtime !== "number" ||
@@ -118,7 +109,7 @@ app.post("/api/decision", async (req, res) => {
       playtime,
       deaths,
       restarts,
-      earlyQuit: early_quit
+      early_quit
     });
 
     const decision = getDecision(risk_score);
@@ -143,14 +134,14 @@ app.post("/api/decision", async (req, res) => {
       decision,
       duplicate: false
     });
-  } catch {
+  } catch (err) {
     res.status(500).json({ error: "Decision API failed" });
   }
 });
 
-// ===============================
-// GAME ANALYTICS
-// ===============================
+/* =====================
+   GAME ANALYTICS
+===================== */
 app.get("/api/analytics/game/:game_id", async (req, res) => {
   try {
     const { game_id } = req.params;
@@ -160,8 +151,9 @@ app.get("/api/analytics/game/:game_id", async (req, res) => {
       .select("decision, risk_score")
       .eq("game_id", game_id);
 
-    if (!data || data.length === 0)
+    if (!data || data.length === 0) {
       return res.status(404).json({ error: "No sessions found" });
+    }
 
     let go = 0, iterate = 0, kill = 0, riskSum = 0;
 
@@ -188,14 +180,14 @@ app.get("/api/analytics/game/:game_id", async (req, res) => {
       average_risk: avgRisk,
       health
     });
-  } catch {
+  } catch (err) {
     res.status(500).json({ error: "Analytics failed" });
   }
 });
 
-// ===============================
-// PLAYER TREND
-// ===============================
+/* =====================
+   PLAYER TREND
+===================== */
 app.get("/api/analytics/player/:player_id/trend", async (req, res) => {
   try {
     const { player_id } = req.params;
@@ -207,8 +199,9 @@ app.get("/api/analytics/player/:player_id/trend", async (req, res) => {
       .order("created_at", { ascending: true })
       .limit(10);
 
-    if (!data || data.length < 4)
+    if (!data || data.length < 4) {
       return res.status(400).json({ error: "Not enough data" });
+    }
 
     const mid = Math.floor(data.length / 2);
     const avg = arr =>
@@ -219,28 +212,23 @@ app.get("/api/analytics/player/:player_id/trend", async (req, res) => {
     const diff = secondAvg - firstAvg;
 
     let trend = "STABLE";
-    if (diff < -5) trend = "IMPROVING";
-    else if (diff > 5) trend = "DEGRADING";
-
-    let confidence = "LOW";
-    if (Math.abs(diff) > 10) confidence = "HIGH";
-    else if (Math.abs(diff) > 5) confidence = "MEDIUM";
+    if (diff <= -5) trend = "IMPROVING";
+    if (diff >= 5) trend = "DEGRADING";
 
     res.json({
       player_id,
       trend,
-      risk_change: diff,
-      confidence
+      risk_change: diff
     });
-  } catch {
+  } catch (err) {
     res.status(500).json({ error: "Trend analysis failed" });
   }
 });
 
-// ===============================
-// SERVER START
-// ===============================
+/* =====================
+   SERVER START
+===================== */
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () =>
-  console.log(`LaunchSense backend running on ${PORT}`)
-);
+app.listen(PORT, () => {
+  console.log(`LaunchSense backend running on ${PORT}`);
+});
