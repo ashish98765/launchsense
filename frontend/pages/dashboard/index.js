@@ -3,11 +3,13 @@ import { useRouter } from "next/router";
 
 export default function Dashboard() {
   const router = useRouter();
+
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [copied, setCopied] = useState(null);
 
-  // Usage limits
+  // FREE PLAN LIMIT
   const MAX_PROJECTS = 3;
 
   useEffect(() => {
@@ -19,8 +21,8 @@ export default function Dashboard() {
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Failed to load projects");
         setProjects(json.projects || []);
-      } catch (err) {
-        setError(err.message);
+      } catch (e) {
+        setError(e.message);
       } finally {
         setLoading(false);
       }
@@ -28,28 +30,31 @@ export default function Dashboard() {
     load();
   }, []);
 
+  const copyKey = async (key, id) => {
+    await navigator.clipboard.writeText(key);
+    setCopied(id);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
   if (loading) return <p style={{ padding: 40 }}>Loading dashboard…</p>;
   if (error) return <p style={{ padding: 40, color: "red" }}>{error}</p>;
 
   const used = projects.length;
   const usagePercent = Math.round((used / MAX_PROJECTS) * 100);
 
-  // Dynamic color
-  const usageColor =
-    usagePercent >= 90
-      ? "#dc2626" // red
-      : usagePercent >= 70
-      ? "#d97706" // orange
-      : "#16a34a"; // green
+  let usageColor =
+    usagePercent >= 90 ? "#dc2626" :
+    usagePercent >= 70 ? "#f59e0b" :
+    "#16a34a";
 
-  // If no projects exist yet — onboarding screen
+  /* ---------------- EMPTY STATE ---------------- */
   if (projects.length === 0) {
     return (
       <div style={{ padding: 40, maxWidth: 900 }}>
         <h1>Welcome to LaunchSense</h1>
-        <p style={{ fontSize: 18, color: "#555" }}>
-          LaunchSense helps you decide whether a game idea should be{" "}
-          <strong>launched, iterated, or killed</strong> — early.
+        <p style={{ color: "#555", fontSize: 18 }}>
+          Decide whether your game idea should be{" "}
+          <strong>GO, ITERATE, or KILL</strong> — early.
         </p>
 
         <div
@@ -58,13 +63,13 @@ export default function Dashboard() {
             padding: 24,
             border: "1px solid #ddd",
             borderRadius: 12,
-            background: "#fafafa",
+            background: "#fafafa"
           }}
         >
           <h3>Your first decision takes 3 steps:</h3>
           <ol style={{ lineHeight: 1.8 }}>
             <li>Create your first project</li>
-            <li>Send a few gameplay sessions (or use demo data)</li>
+            <li>Send a few gameplay sessions (or demo data)</li>
             <li>Get a clear GO / ITERATE / KILL decision</li>
           </ol>
 
@@ -76,7 +81,7 @@ export default function Dashboard() {
               background: "#000",
               color: "#fff",
               border: "none",
-              cursor: "pointer",
+              cursor: "pointer"
             }}
           >
             Create First Project →
@@ -86,12 +91,12 @@ export default function Dashboard() {
     );
   }
 
-  // Normal dashboard view (projects exist)
+  /* ---------------- NORMAL DASHBOARD ---------------- */
   return (
     <div style={{ padding: 40, maxWidth: 900 }}>
-      <h1>My Projects</h1>
+      <h1>Your Projects</h1>
       <p style={{ color: "#666" }}>
-        Click a project to view analytics and decisions.
+        Click a project to view analytics. Use the API key inside your game.
       </p>
 
       {/* USAGE BAR */}
@@ -102,30 +107,27 @@ export default function Dashboard() {
           padding: 16,
           border: "1px solid #ddd",
           borderRadius: 10,
-          background: "#fafafa",
+          background: "#fafafa"
         }}
       >
-        <strong>Free Plan Usage:</strong>
-        <p style={{ color: usageColor }}>
-          {used} / {MAX_PROJECTS} projects used ({usagePercent}%)
-        </p>
+        <strong style={{ color: usageColor }}>
+          Free plan usage: {used}/{MAX_PROJECTS} projects ({usagePercent}%)
+        </strong>
+
         {usagePercent >= 70 && (
-          <p style={{ color: usageColor }}>
-            ⚠️ You’re close to your free limit.
-            {usagePercent >= 90 ? (
+          <p style={{ marginTop: 8, color: usageColor }}>
+            ⚠️ You are close to your free limit.
+            {usagePercent >= 90 && (
               <>
-                {" "}
                 <br />
                 <a href="/pricing">Upgrade to continue →</a>
               </>
-            ) : (
-              " Keep growing — consider upgrading soon."
             )}
           </p>
         )}
       </div>
 
-      {/* CREATE PROJECT BUTTON */}
+      {/* CREATE BUTTON */}
       <button
         onClick={() =>
           used >= MAX_PROJECTS
@@ -138,36 +140,60 @@ export default function Dashboard() {
           background: "#000",
           color: "#fff",
           border: "none",
-          cursor: "pointer",
+          cursor: "pointer"
         }}
       >
         + Create New Project
       </button>
 
       {/* PROJECT LIST */}
-      {projects.map((p) => (
+      {projects.map(p => (
         <div
           key={p.game_id}
           style={{
             border: "1px solid #ddd",
             borderRadius: 10,
             padding: 18,
-            marginBottom: 18,
+            marginBottom: 18
           }}
         >
           <h3>{p.name}</h3>
-          <p>
+
+          <p style={{ fontSize: 13 }}>
             <strong>Game ID:</strong> <code>{p.game_id}</code>
           </p>
+
+          <p style={{ fontSize: 13 }}>
+            <strong>API Key:</strong>{" "}
+            <code style={{ background: "#f4f4f4", padding: "4px 6px" }}>
+              {p.api_key || "Hidden"}
+            </code>
+          </p>
+
+          <button
+            onClick={() => copyKey(p.api_key, p.game_id)}
+            style={{
+              marginRight: 10,
+              padding: "6px 12px",
+              cursor: "pointer"
+            }}
+          >
+            Copy API Key
+          </button>
+
+          {copied === p.game_id && (
+            <span style={{ color: "green" }}>✓ Copied</span>
+          )}
+
+          <br /><br />
+
           <button
             onClick={() => router.push(`/dashboard/${p.game_id}`)}
             style={{
-              marginTop: 10,
               padding: "8px 14px",
-              background: "#000",
-              color: "#fff",
-              border: "none",
-              cursor: "pointer",
+              background: "#eee",
+              border: "1px solid #ccc",
+              cursor: "pointer"
             }}
           >
             View Analytics →
