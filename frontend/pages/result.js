@@ -41,24 +41,28 @@ export default function Result() {
     );
   }
 
-  const decisionColor =
-    data.health === "GOOD"
-      ? "green"
-      : data.health === "BAD"
-      ? "red"
-      : "orange";
+  /* ---------- Decision mapping ---------- */
 
-  const decisionText =
-    data.health === "GOOD"
-      ? "GO"
-      : data.health === "BAD"
-      ? "KILL"
-      : "ITERATE";
+  let decisionText = "ITERATE";
+  let decisionColor = "orange";
+  let decisionMessage = "Core issues detected. Fix fundamentals before scaling.";
+
+  if (data.health === "GOOD") {
+    decisionText = "GO";
+    decisionColor = "green";
+    decisionMessage = "Project shows strong execution signals. Safe to scale.";
+  }
+
+  if (data.health === "BAD") {
+    decisionText = "KILL";
+    decisionColor = "red";
+    decisionMessage =
+      "High risk pattern detected. Stop and rethink the idea.";
+  }
 
   return (
     <div style={{ padding: 40, maxWidth: 600 }}>
       <h1>LaunchSense Decision</h1>
-
       <hr />
 
       <p>
@@ -85,16 +89,7 @@ export default function Result() {
         Decision: {decisionText}
       </h2>
 
-      <p style={{ fontSize: 16 }}>
-        {decisionText === "GO" &&
-          "Project shows strong execution signals. Safe to scale."}
-
-        {decisionText === "ITERATE" &&
-          "Core issues detected. Fix fundamentals before scaling."}
-
-        {decisionText === "KILL" &&
-          "High risk pattern detected. Stop and rethink the idea."}
-      </p>
+      <p style={{ fontSize: 16 }}>{decisionMessage}</p>
     </div>
   );
 }
