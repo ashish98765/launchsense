@@ -34,21 +34,18 @@ export default function GameAnalytics() {
       ? "#dc2626"
       : "#d97706";
 
-  // CONFIDENCE LOGIC
+  // CONFIDENCE
   let confidence = "Low";
   let confidenceNote =
     "Very small sample size. Treat this decision as directional.";
 
   if (data.total_sessions >= 20) {
     confidence = "Medium";
-    confidenceNote =
-      "Moderate sample size. Decision is reasonably reliable.";
+    confidenceNote = "Moderate sample size. Decision is reasonably reliable.";
   }
-
   if (data.total_sessions >= 50) {
     confidence = "High";
-    confidenceNote =
-      "Large enough sample size. Decision is statistically stable.";
+    confidenceNote = "Large enough sample size. Decision is statistically stable.";
   }
 
   const confidenceColor =
@@ -57,6 +54,30 @@ export default function GameAnalytics() {
       : confidence === "Medium"
       ? "#d97706"
       : "#dc2626";
+
+  // FIX SUGGESTIONS
+  const fixes = [];
+  if (data.health === "ITERATE") {
+    if (data.average_risk >= 55) {
+      fixes.push("Simplify onboarding and core mechanics in the first 2 minutes.");
+    }
+    if (data.kill_percent >= 20) {
+      fixes.push("Reduce early difficulty spikes (deaths/restarts).");
+    }
+    fixes.push("Clarify the core loop and player objective.");
+  }
+
+  if (data.health === "KILL") {
+    fixes.push("Stop further development to avoid sunk costs.");
+    fixes.push("Extract learnings and pivot to a new idea.");
+    fixes.push("Re-test only after a major concept change.");
+  }
+
+  if (data.health === "GO") {
+    fixes.push("Increase sample size with more players.");
+    fixes.push("Begin retention and monetization experiments.");
+    fixes.push("Validate long-session engagement.");
+  }
 
   return (
     <div style={page}>
@@ -77,7 +98,6 @@ export default function GameAnalytics() {
         <h2 style={{ color: decisionColor }}>
           FINAL DECISION: {data.health}
         </h2>
-
         <p style={{ fontSize: 18, marginTop: 10 }}>
           {data.health === "GO" &&
             "Players are engaging well. Core loop shows promise."}
@@ -102,10 +122,27 @@ export default function GameAnalytics() {
           Decision Confidence:{" "}
           <span style={{ color: confidenceColor }}>{confidence}</span>
         </h3>
-        <p style={{ marginTop: 8 }}>{confidenceNote}</p>
+        <p>{confidenceNote}</p>
         <p style={{ fontSize: 14, color: "#666" }}>
           Based on {data.total_sessions} session(s).
         </p>
+      </div>
+
+      {/* FIX SUGGESTIONS */}
+      <div
+        style={{
+          marginTop: 24,
+          padding: 20,
+          border: "1px solid #ddd",
+          borderRadius: 10,
+        }}
+      >
+        <h3>What to Fix Next</h3>
+        <ul>
+          {fixes.map((f, i) => (
+            <li key={i}>{f}</li>
+          ))}
+        </ul>
       </div>
 
       {/* METRICS */}
@@ -120,10 +157,7 @@ export default function GameAnalytics() {
         <Metric label="KILL %" value={`${data.kill_percent}%`} />
       </div>
 
-      <button
-        onClick={() => router.push("/dashboard")}
-        style={backBtn}
-      >
+      <button onClick={() => router.push("/dashboard")} style={backBtn}>
         ← Back to Dashboard
       </button>
     </div>
