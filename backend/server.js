@@ -332,3 +332,57 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`LaunchSense backend running on ${PORT}`);
 });
+
+/* =======================
+   STEP 33 — PLAYER RISK FORECAST
+======================= */
+app.get("/api/analytics/player/:player_id/forecast", async (req, res) => {
+  try {
+    const { player_id } = req.params;
+
+    const { data } = await supabase
+      .from("game_sessions")
+      .select("risk_score, created_at")
+      .eq("player_id", player_id)
+      .order("created_at", { ascending: true })
+      .limit(10);
+
+    if (!data || data.length < 4) {
+      return res.status(400).json({ error: "Not enough data" });
+    }
+
+    const risks = data.map(d => d.risk_score);
+
+    const avgRisk = Math.round(
+      risks.reduce((a, b) => a + b, 0) / risks.length
+    );
+
+    const velocity = Math.round(
+      (risks[risks.length - 1] - risks[0]) / (risks.length - 1)
+    );
+
+    const forecast5 = Math.min(100, Math.max(0, avgRisk + velocity * 5));
+    const forecast10 = Math.min(100, Math.max(0, avgRisk + velocity * 10));
+
+    let risk_zone = "LOW";
+    if (forecast5 > 60 || forecast10 > 70) risk_zone = "HIGH";
+    else if (forecast5 > 40) risk_zone = "MEDIUM";
+
+    let action = "NONE";
+    if (risk_zone === "HIGH") action = "INTERVENE";
+    else if (risk_zone === "MEDIUM") action = "MONITOR";
+
+    res.json({
+      player_id,
+      current_avg_risk: avgRisk,
+      velocity,
+      forecast_5_sessions: forecast5,
+      forecast_10_sessions: forecast10,
+      risk_zone,
+      action
+    });
+  } catch (err) {
+    console.error("Forecast failed", err);
+    res.status(500).json({ error: "Forecast failed" });
+  }
+});
