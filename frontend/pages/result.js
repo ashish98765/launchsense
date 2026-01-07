@@ -1,91 +1,100 @@
-// frontend/pages/result.js
-
 import { useEffect, useState } from "react";
-import { useRouter } from "next/router";
-import { submitDecision } from "../lib/api";
 
 export default function Result() {
-  const router = useRouter();
+  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [result, setResult] = useState(null);
 
   useEffect(() => {
-    if (!router.isReady) return;
-
-    const {
-      game_id,
-      player_id,
-      session_id,
-      playtime,
-      deaths,
-      restarts,
-      early_quit,
-    } = router.query;
-
-    async function runDecision() {
+    const fetchResult = async () => {
       try {
-        const data = await submitDecision({
-          game_id,
-          player_id,
-          session_id,
-          playtime: Number(playtime),
-          deaths: Number(deaths),
-          restarts: Number(restarts),
-          early_quit: early_quit === "true",
-        });
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/analytics/game/game_001`
+        );
 
-        setResult(data);
+        const json = await res.json();
+
+        if (!res.ok) {
+          throw new Error(json.error || "Failed to fetch result");
+        }
+
+        setData(json);
       } catch (err) {
         setError(err.message);
       } finally {
         setLoading(false);
       }
-    }
+    };
 
-    runDecision();
-  }, [router.isReady]);
+    fetchResult();
+  }, []);
 
   if (loading) {
-    return <div style={{ padding: 40 }}>⏳ Analyzing decision…</div>;
+    return <p style={{ padding: 40 }}>Analyzing project risk...</p>;
   }
 
   if (error) {
-    return <div style={{ padding: 40, color: "red" }}>❌ {error}</div>;
+    return (
+      <div style={{ padding: 40, color: "red" }}>
+        ❌ {error}
+      </div>
+    );
   }
 
+  const decisionColor =
+    data.health === "GOOD"
+      ? "green"
+      : data.health === "BAD"
+      ? "red"
+      : "orange";
+
+  const decisionText =
+    data.health === "GOOD"
+      ? "GO"
+      : data.health === "BAD"
+      ? "KILL"
+      : "ITERATE";
+
   return (
-    <div style={{ padding: 40 }}>
-      <h2>LaunchSense Decision</h2>
+    <div style={{ padding: 40, maxWidth: 600 }}>
+      <h1>LaunchSense Decision</h1>
+
+      <hr />
 
       <p>
-        <strong>Risk Score:</strong> {result.risk_score}
+        <strong>Total Sessions:</strong> {data.total_sessions}
       </p>
 
       <p>
-        <strong>Decision:</strong> {result.decision}
+        <strong>Average Risk:</strong> {data.average_risk}/100
       </p>
 
-      {result.decision === "KILL" && (
-        <div style={{ color: "red", marginTop: 20 }}>
-          <strong>⚠ Kill Mode Activated</strong>
-          <p>This decision is irreversible.</p>
-        </div>
-      )}
+      <p>
+        <strong>GO %:</strong> {data.go_percent}%
+      </p>
 
-      {result.decision === "ITERATE" && (
-        <div style={{ color: "orange", marginTop: 20 }}>
-          <strong>🔁 Iterate Required</strong>
-          <p>Fix core issues before scaling.</p>
-        </div>
-      )}
+      <p>
+        <strong>ITERATE %:</strong> {data.iterate_percent}%
+      </p>
 
-      {result.decision === "GO" && (
-        <div style={{ color: "green", marginTop: 20 }}>
-          <strong>🚀 GO Decision</strong>
-          <p>Product is healthy to move forward.</p>
-        </div>
-      )}
+      <p>
+        <strong>KILL %:</strong> {data.kill_percent}%
+      </p>
+
+      <h2 style={{ color: decisionColor, marginTop: 30 }}>
+        Decision: {decisionText}
+      </h2>
+
+      <p style={{ fontSize: 16 }}>
+        {decisionText === "GO" &&
+          "Project shows strong execution signals. Safe to scale."}
+
+        {decisionText === "ITERATE" &&
+          "Core issues detected. Fix fundamentals before scaling."}
+
+        {decisionText === "KILL" &&
+          "High risk pattern detected. Stop and rethink the idea."}
+      </p>
     </div>
   );
 }
