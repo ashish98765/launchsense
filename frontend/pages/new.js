@@ -8,10 +8,7 @@ export default function NewProject() {
   const router = useRouter();
 
   const createProject = async () => {
-    if (!name.trim()) {
-      setError("Project name required");
-      return;
-    }
+    if (!name) return setError("Project name required");
 
     setLoading(true);
     setError("");
@@ -22,14 +19,15 @@ export default function NewProject() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name })
+          body: JSON.stringify({ name }),
         }
       );
 
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed");
 
-      router.push(`/project/${json.game_id}`);
+      // 🔴 IMPORTANT REDIRECT
+      router.push(`/dashboard/${json.game_id}`);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -38,43 +36,21 @@ export default function NewProject() {
   };
 
   return (
-    <div style={{ padding: 60, maxWidth: 600, margin: "0 auto" }}>
+    <div style={{ padding: 40, maxWidth: 500 }}>
       <h1>Create New Project</h1>
 
-      <p style={{ color: "#555", marginBottom: 20 }}>
-        Add your game or app to start analyzing real user behavior.
-      </p>
-
       <input
-        placeholder="Project name (e.g. Space Runner)"
         value={name}
         onChange={(e) => setName(e.target.value)}
-        style={{
-          width: "100%",
-          padding: 12,
-          fontSize: 16,
-          marginBottom: 20
-        }}
+        placeholder="Project name"
+        style={{ width: "100%", padding: 10, marginBottom: 10 }}
       />
 
-      {error && (
-        <p style={{ color: "red", marginBottom: 10 }}>{error}</p>
-      )}
-
-      <button
-        onClick={createProject}
-        disabled={loading}
-        style={{
-          padding: "12px 24px",
-          fontSize: 16,
-          background: "#000",
-          color: "#fff",
-          border: "none",
-          cursor: "pointer"
-        }}
-      >
+      <button onClick={createProject} disabled={loading}>
         {loading ? "Creating..." : "Create Project"}
       </button>
+
+      {error && <p style={{ color: "red" }}>{error}</p>}
     </div>
   );
 }
