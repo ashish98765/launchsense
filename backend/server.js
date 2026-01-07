@@ -1,5 +1,5 @@
 // backend/server.js
-// LaunchSense Backend – FINAL CLEAN VERSION
+// LaunchSense Backend – FINAL STABLE VERSION
 
 const express = require("express");
 const cors = require("cors");
@@ -9,35 +9,30 @@ const { createClient } = require("@supabase/supabase-js");
 const { calculateRiskScore, getDecision } = require("./decisionEngine");
 
 const app = express();
-
-/* ===============================
-   MIDDLEWARE
-================================ */
 app.use(cors());
 app.use(express.json());
 
-/* ===============================
-   SUPABASE SETUP
-================================ */
+// ======================
+// SUPABASE
+// ======================
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-/* ===============================
-   HEALTH CHECK
-================================ */
+// ======================
+// HEALTH
+// ======================
 app.get("/", (req, res) => {
   res.json({ status: "LaunchSense backend running" });
 });
 
-/* ===============================
-   CREATE PROJECT
-================================ */
+// ======================
+// CREATE PROJECT
+// ======================
 app.post("/api/projects", async (req, res) => {
   try {
     const { user_id, name } = req.body;
-
     if (!user_id || !name) {
       return res.status(400).json({ error: "user_id and name required" });
     }
@@ -52,18 +47,15 @@ app.post("/api/projects", async (req, res) => {
 
     if (error) throw error;
 
-    res.json({
-      success: true,
-      project: data
-    });
-  } catch (err) {
+    res.json({ success: true, project: data });
+  } catch {
     res.status(500).json({ error: "Project creation failed" });
   }
 });
 
-/* ===============================
-   LIST PROJECTS (IMPORTANT)
-================================ */
+// ======================
+// LIST PROJECTS
+// ======================
 app.get("/api/projects", async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -73,18 +65,15 @@ app.get("/api/projects", async (req, res) => {
 
     if (error) throw error;
 
-    res.json({
-      success: true,
-      projects: data
-    });
-  } catch (err) {
+    res.json({ success: true, projects: data });
+  } catch {
     res.status(500).json({ error: "Failed to fetch projects" });
   }
 });
 
-/* ===============================
-   SESSION DECISION API
-================================ */
+// ======================
+// SESSION DECISION
+// ======================
 app.post("/api/decision", async (req, res) => {
   try {
     const {
@@ -94,7 +83,7 @@ app.post("/api/decision", async (req, res) => {
       playtime,
       deaths,
       restarts,
-      early_quit
+      early_quit,
     } = req.body;
 
     if (!game_id || !player_id || !session_id) {
@@ -110,7 +99,6 @@ app.post("/api/decision", async (req, res) => {
       return res.status(400).json({ error: "Invalid data types" });
     }
 
-    // Duplicate check
     const { data: existing } = await supabase
       .from("game_sessions")
       .select("risk_score, decision")
@@ -124,7 +112,7 @@ app.post("/api/decision", async (req, res) => {
         success: true,
         risk_score: existing.risk_score,
         decision: existing.decision,
-        duplicate: true
+        duplicate: true,
       });
     }
 
@@ -132,7 +120,7 @@ app.post("/api/decision", async (req, res) => {
       playtime,
       deaths,
       restarts,
-      earlyQuit: early_quit
+      early_quit,
     });
 
     const decision = getDecision(risk_score);
@@ -147,24 +135,24 @@ app.post("/api/decision", async (req, res) => {
         restarts,
         early_quit,
         risk_score,
-        decision
-      }
+        decision,
+      },
     ]);
 
     res.json({
       success: true,
       risk_score,
       decision,
-      duplicate: false
+      duplicate: false,
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Decision API failed" });
   }
 });
 
-/* ===============================
-   GAME ANALYTICS
-================================ */
+// ======================
+// GAME ANALYTICS
+// ======================
 app.get("/api/analytics/game/:game_id", async (req, res) => {
   try {
     const { game_id } = req.params;
@@ -175,7 +163,15 @@ app.get("/api/analytics/game/:game_id", async (req, res) => {
       .eq("game_id", game_id);
 
     if (!data || data.length === 0) {
-      return res.status(404).json({ error: "No sessions found" });
+      return res.json({
+        game_id,
+        total_sessions: 0,
+        go_percent: 0,
+        iterate_percent: 0,
+        kill_percent: 0,
+        average_risk: 0,
+        health: "ITERATE",
+      });
     }
 
     let go = 0,
@@ -204,59 +200,50 @@ app.get("/api/analytics/game/:game_id", async (req, res) => {
       iterate_percent: Math.round((iterate / total) * 100),
       kill_percent: Math.round((kill / total) * 100),
       average_risk: avgRisk,
-      health
+      health,
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Analytics failed" });
   }
 });
 
-/* ===============================
-   PLAYER TREND
-================================ */
-app.get("/api/analytics/player/:player_id/trend", async (req, res) => {
+// ======================
+// DEMO DATA
+// ======================
+app.post("/api/demo/:game_id", async (req, res) => {
   try {
-    const { player_id } = req.params;
+    const { game_id } = req.params;
 
-    const { data } = await supabase
-      .from("game_sessions")
-      .select("risk_score, created_at")
-      .eq("player_id", player_id)
-      .order("created_at", { ascending: true })
-      .limit(10);
+    const demo = [
+      { playtime: 120, deaths: 5, restarts: 2, early_quit: true },
+      { playtime: 280, deaths: 2, restarts: 1, early_quit: false },
+      { playtime: 420, deaths: 1, restarts: 0, early_quit: false },
+      { playtime: 190, deaths: 4, restarts: 3, early_quit: true },
+      { playtime: 360, deaths: 2, restarts: 1, early_quit: false },
+    ];
 
-    if (!data || data.length < 4) {
-      return res.status(400).json({ error: "Not enough data" });
+    for (let i = 0; i < demo.length; i++) {
+      const risk_score = calculateRiskScore(demo[i]);
+      const decision = getDecision(risk_score);
+
+      await supabase.from("game_sessions").insert({
+        game_id,
+        player_id: `demo_${i}`,
+        session_id: `demo_${Date.now()}_${i}`,
+        ...demo[i],
+        risk_score,
+        decision,
+      });
     }
 
-    const mid = Math.floor(data.length / 2);
-
-    const avg = (arr) =>
-      Math.round(arr.reduce((s, x) => s + x.risk_score, 0) / arr.length);
-
-    const firstAvg = avg(data.slice(0, mid));
-    const secondAvg = avg(data.slice(mid));
-
-    const diff = secondAvg - firstAvg;
-
-    let trend = "STABLE";
-    if (diff < -5) trend = "IMPROVING";
-    if (diff > 5) trend = "DEGRADING";
-
-    res.json({
-      player_id,
-      trend,
-      risk_change: diff
-    });
-  } catch (err) {
-    res.status(500).json({ error: "Trend analysis failed" });
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: "Demo failed" });
   }
 });
 
-/* ===============================
-   SERVER START
-================================ */
+// ======================
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`LaunchSense backend running on ${PORT}`);
-});
+app.listen(PORT, () =>
+  console.log("LaunchSense backend running on", PORT)
+);
