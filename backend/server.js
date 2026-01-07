@@ -1,5 +1,6 @@
 // LaunchSense Backend — API Key Secured Version
 
+const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
@@ -69,6 +70,33 @@ app.post("/api/projects", async (req, res) => {
     });
   } catch {
     res.status(500).json({ error: "Project creation failed" });
+  }
+});
+
+app.post("/api/api-keys/generate", async (req, res) => {
+  try {
+    const { user_id } = req.body;
+
+    if (!user_id) {
+      return res.status(400).json({ error: "user_id required" });
+    }
+
+    const api_key = crypto.randomBytes(32).toString("hex");
+
+    const { data, error } = await supabase
+      .from("api_keys")
+      .insert([{ user_id, api_key }])
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      api_key: data.api_key,
+    });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to generate API key" });
   }
 });
 
