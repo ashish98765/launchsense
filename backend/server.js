@@ -84,8 +84,7 @@ app.post("/api/projects", async (req, res) => {
     const { data: project, error: projectError } = await supabase
       .from("projects")
       .insert([{ user_id, name, game_id }])
-      .select()
-      .single();
+      .select();
 
     if (projectError) {
       console.error("PROJECT INSERT ERROR:", projectError);
