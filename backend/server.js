@@ -1,8 +1,9 @@
-// LaunchSense Backend — STEP 38 + STEP 39 (Rate Limiting)
+// LaunchSense Backend — STEP 38 + 39 + 40
 
 const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
+const timeout = require("connect-timeout");
 require("dotenv").config();
 
 const rateLimit = require("express-rate-limit");
@@ -17,10 +18,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ---------------- STEP 40 — REQUEST TIMEOUT ----------------
+// Any request > 10 seconds will be killed
+app.use(timeout("10s"));
+app.use((req, res, next) => {
+  if (!req.timedout) next();
+});
+
 // ---------------- STEP 38 — GLOBAL IP RATE LIMIT ----------------
 const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 min
-  max: 100, // per IP
+  windowMs: 15 * 60 * 1000,
+  max: 100,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests from this IP. Slow down." }
@@ -28,10 +36,9 @@ const globalLimiter = rateLimit({
 app.use(globalLimiter);
 
 // ---------------- STEP 39 — API KEY RATE LIMIT ----------------
-// key = game_id + api_key (per game protection)
 const apiKeyLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 100, // per game per minute
+  windowMs: 1 * 60 * 1000,
+  max: 100,
   keyGenerator: (req) => {
     const gameId = req.headers["x-game-id"] || "unknown-game";
     const apiKey = req.headers["x-api-key"] || "unknown-key";
@@ -85,7 +92,7 @@ app.get("/", (req, res) => {
   res.json({ status: "LaunchSense backend running" });
 });
 
-// ---------------- DEMO (PUBLIC) ----------------
+// ---------------- DEMO ----------------
 app.get("/api/demo/analytics", (req, res) => {
   res.json({
     demo: true,
@@ -136,22 +143,7 @@ app.post("/api/projects", async (req, res) => {
   }
 });
 
-// ================= LIST PROJECTS =================
-app.get("/api/projects", async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from("projects")
-      .select("game_id, name, created_at")
-      .order("created_at", { ascending: false });
-
-    if (error) throw error;
-    res.json({ success: true, projects: data });
-  } catch (e) {
-    res.status(500).json({ error: "Failed to fetch projects" });
-  }
-});
-
-// ================= DECISION API (PROTECTED + RATE LIMITED) =================
+// ================= DECISION API =================
 app.post(
   "/api/decision",
   apiKeyLimiter,
@@ -199,67 +191,10 @@ app.post(
 
       res.json({ success: true, risk_score, decision });
     } catch (e) {
-      res.status(500).json({ error: "Decision API failed" });
-    }
-  }
-);
-
-// ================= ANALYTICS (PROTECTED + RATE LIMITED) =================
-app.get(
-  "/api/analytics/:game_id",
-  apiKeyLimiter,
-  apiKeyMiddleware,
-  async (req, res) => {
-    try {
-      const { game_id } = req.params;
-
-      const { data } = await supabase
-        .from("game_sessions")
-        .select("decision, risk_score")
-        .eq("game_id", game_id);
-
-      if (!data || data.length === 0) {
-        return res.json({
-          game_id,
-          total_sessions: 0,
-          go_percent: 0,
-          iterate_percent: 0,
-          kill_percent: 0,
-          average_risk: 0,
-          health: "ITERATE"
-        });
+      if (req.timedout) {
+        return res.status(408).json({ error: "Request timeout" });
       }
-
-      let go = 0,
-        iterate = 0,
-        kill = 0,
-        riskSum = 0;
-
-      data.forEach(s => {
-        riskSum += s.risk_score;
-        if (s.decision === "GO") go++;
-        else if (s.decision === "ITERATE") iterate++;
-        else kill++;
-      });
-
-      const total = data.length;
-      const avgRisk = Math.round(riskSum / total);
-
-      let health = "ITERATE";
-      if (go / total > 0.6 && avgRisk < 40) health = "GO";
-      if (kill / total > 0.3 && avgRisk > 65) health = "KILL";
-
-      res.json({
-        game_id,
-        total_sessions: total,
-        go_percent: Math.round((go / total) * 100),
-        iterate_percent: Math.round((iterate / total) * 100),
-        kill_percent: Math.round((kill / total) * 100),
-        average_risk: avgRisk,
-        health
-      });
-    } catch (e) {
-      res.status(500).json({ error: "Analytics failed" });
+      res.status(500).json({ error: "Decision API failed" });
     }
   }
 );
