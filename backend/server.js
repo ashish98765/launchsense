@@ -1,10 +1,4 @@
-/**
- * LaunchSense Backend
- * Phase-1 Final Base (9.5+ Foundation)
- * Decision Intelligence • Temporal Context • Observability
- */
-
-require("dotenv").config();
+// LaunchSense Backend — Phase 4 + A2 Counterfactual Intelligence
 
 const crypto = require("crypto");
 const express = require("express");
@@ -12,23 +6,16 @@ const cors = require("cors");
 const helmet = require("helmet");
 const timeout = require("connect-timeout");
 const rateLimit = require("express-rate-limit");
+require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
-
 const { calculateRiskScore, getDecision } = require("./decisionEngine");
-const { analyzeTemporal } = require("./temporalEngine");
-const { buildExplanation } = require("./explainEngine");
-const { buildLedgerEntry } = require("./ledger");
-const {
-  observabilityMiddleware,
-  trackDecision,
-  getObservabilitySnapshot
-} = require("./observability");
+const { buildCounterfactuals } = require("./counterfactualEngine");
 
 const app = express();
 app.disable("x-powered-by");
 
-/* ===================== ENV VALIDATION ===================== */
+/* ================= ENV CHECK ================= */
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach(k => {
   if (!process.env[k]) {
     console.error("Missing ENV:", k);
@@ -36,75 +23,53 @@ app.disable("x-powered-by");
   }
 });
 
-/* ===================== CONFIG ===================== */
+/* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "3.0.0-phase1",
+  VERSION: "2.6.0-A2",
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
   ADMIN_TOKEN: process.env.ADMIN_TOKEN || null,
-  READONLY: process.env.FEATURE_READONLY === "on",
-  AUTO_DECISION: process.env.FEATURE_AUTO_DECISION === "on",
-  SLA_MS: Number(process.env.SLA_MAX_MS || 2500)
+  READONLY: process.env.FEATURE_READONLY === "on"
 };
 
-/* ===================== CORE MIDDLEWARE ===================== */
+/* ================= CORE MIDDLEWARE ================= */
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: "300kb" }));
-app.use(timeout("10s"));
+app.use(timeout("12s"));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 600 }));
-app.use(observabilityMiddleware);
 
-/* ===================== REQUEST CONTEXT ===================== */
 app.use((req, res, next) => {
   req.id = crypto.randomUUID();
-  req.start = Date.now();
-
+  req._start = Date.now();
   res.on("finish", () => {
-    const duration = Date.now() - req.start;
-    if (duration > CONFIG.SLA_MS) {
-      console.warn("SLA_BREACH", {
-        path: req.path,
-        duration,
-        request_id: req.id
-      });
-    }
+    const ms = Date.now() - req._start;
+    if (ms > 1500) console.warn("SLOW", req.path, ms);
   });
-
   next();
 });
 
-/* ===================== READONLY MODE ===================== */
+/* ================= READONLY MODE ================= */
 app.use((req, res, next) => {
   if (CONFIG.READONLY && req.method !== "GET") {
-    return res.status(503).json({
-      success: false,
-      error: "System in maintenance mode"
-    });
+    return res.status(503).json({ error: "Maintenance mode" });
   }
   next();
 });
 
-/* ===================== SUPABASE ===================== */
-const supabase = createClient(
-  CONFIG.SUPABASE_URL,
-  CONFIG.SUPABASE_KEY,
-  { auth: { persistSession: false } }
-);
+/* ================= SUPABASE ================= */
+const supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
 
-/* ===================== HELPERS ===================== */
+/* ================= HELPERS ================= */
 const ok = (res, data) => res.json({ success: true, data });
-const fail = (res, code, msg) =>
-  res.status(code).json({ success: false, error: msg });
+const fail = (res, c, m) => res.status(c).json({ success: false, error: m });
 
-/* ===================== AUTH ===================== */
+/* ================= AUTH ================= */
 async function apiAuth(req, res, next) {
   const api_key = req.headers["x-api-key"];
   const game_id = req.headers["x-game-id"];
-
-  if (!api_key || !game_id)
-    return fail(res, 401, "Missing API credentials");
+  if (!api_key || !game_id) return fail(res, 401, "Missing API credentials");
 
   const { data } = await supabase
     .from("api_keys")
@@ -115,100 +80,44 @@ async function apiAuth(req, res, next) {
     .maybeSingle();
 
   if (!data) return fail(res, 401, "Invalid API key");
-
   req.game_id = game_id;
   next();
 }
 
 function adminAuth(req, res, next) {
-  if (!CONFIG.ADMIN_TOKEN)
-    return fail(res, 503, "Admin disabled");
-
+  if (!CONFIG.ADMIN_TOKEN) return fail(res, 503, "Admin disabled");
   if (req.headers["x-admin-token"] !== CONFIG.ADMIN_TOKEN)
     return fail(res, 401, "Admin auth failed");
-
   next();
 }
 
-/* ===================== ROUTER ===================== */
+/* ================= ROUTER ================= */
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ===================== HEALTH ===================== */
+/* ================= HEALTH ================= */
 v1.get("/", (_, res) =>
   ok(res, { status: "live", version: CONFIG.VERSION })
 );
 
-v1.get("/health", (_, res) =>
-  ok(res, {
-    uptime_sec: Math.floor(process.uptime()),
-    memory_mb: Math.round(process.memoryUsage().rss / 1024 / 1024),
-    version: CONFIG.VERSION
-  })
-);
-
-/* ===================== DECISION SDK ===================== */
+/* ================= SDK DECISION (A2) ================= */
 v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
     const risk = calculateRiskScore(req.body);
-    let decision = getDecision(risk);
+    const baseDecision = getDecision(risk);
 
-    const { data: history } = await supabase
-      .from("daily_analytics")
-      .select("avg_risk")
-      .eq("game_id", req.game_id)
-      .order("date", { ascending: false })
-      .limit(7);
-
-    const temporal = analyzeTemporal(history || []);
-
-    if (CONFIG.AUTO_DECISION) {
-      if (
-        temporal.shock ||
-        temporal.trend === "DECLINING"
-      ) {
-        decision = "ITERATE";
-      }
-    } else {
-      decision = "REVIEW";
-    }
-
-    const metrics = {
-      engagement: Math.min((req.body.playtime || 0) / 600, 1),
-      frustration: Math.min(
-        ((req.body.deaths || 0) * 2 + (req.body.restarts || 0)) / 10,
-        1
-      ),
-      early_exit: !!req.body.early_quit,
-      confidence: Math.round((1 - Math.abs(0.5 - risk)) * 100)
+    const base = {
+      risk,
+      confidence: Math.round((1 - Math.abs(0.5 - risk)) * 100) / 100,
+      momentum: req.body.momentum || 0
     };
 
-    const explanation = buildExplanation(
-      req.body,
-      metrics,
-      decision
-    );
-
-    const ledger = buildLedgerEntry({
-      game_id: req.game_id,
-      decision,
-      source: CONFIG.AUTO_DECISION ? "AI" : "HUMAN",
-      risk_score: Math.round(risk * 100),
-      confidence: explanation.confidence,
-      explanation_id: explanation.explanation_id,
-      temporal,
-      input: req.body
-    });
-
-    trackDecision(decision);
+    const counterfactuals = buildCounterfactuals(base);
 
     ok(res, {
-      decision,
-      risk_score: ledger.risk_score,
-      confidence: ledger.confidence,
-      trend: temporal.trend,
-      stability: temporal.stability,
-      explanation
+      decision: baseDecision,
+      risk_score: Math.round(risk * 100),
+      counterfactuals
     });
   } catch (e) {
     console.error("Decision error:", e);
@@ -216,15 +125,15 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
   }
 });
 
-/* ===================== ADMIN ===================== */
-v1.get("/admin/observability", adminAuth, (_, res) =>
-  ok(res, getObservabilitySnapshot())
-);
+/* ================= ADMIN ================= */
+v1.get("/admin/system-status", adminAuth, async (_, res) => {
+  ok(res, {
+    version: CONFIG.VERSION,
+    readonly: CONFIG.READONLY
+  });
+});
 
-/* ===================== START ===================== */
+/* ================= START ================= */
 app.listen(CONFIG.PORT, () => {
-  console.log(
-    `LaunchSense ${CONFIG.VERSION} running on port`,
-    CONFIG.PORT
-  );
+  console.log(`LaunchSense ${CONFIG.VERSION} running on`, CONFIG.PORT);
 });
