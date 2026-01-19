@@ -1,4 +1,4 @@
-// LaunchSense Backend — STEP 101 to STEP 110 (Orgs, Teams, RBAC, Dashboard)
+// LaunchSense Backend — STEP 111 to STEP 120 (SDK, Idempotency, Webhooks, Observability)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -15,7 +15,12 @@ const app = express();
 app.disable("x-powered-by");
 
 // ================= CONFIG =================
-["SUPABASE_URL", "SUPABASE_SERVICE_KEY", "PORT"].forEach(k => {
+[
+  "SUPABASE_URL",
+  "SUPABASE_SERVICE_KEY",
+  "PORT",
+  "WEBHOOK_SIGNING_SECRET"
+].forEach(k => {
   if (!process.env[k]) {
     console.error("Missing ENV:", k);
     process.exit(1);
@@ -25,41 +30,40 @@ app.disable("x-powered-by");
 const CONFIG = {
   PORT: process.env.PORT,
   SUPABASE_URL: process.env.SUPABASE_URL,
-  SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY
+  SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
+  WEBHOOK_SECRET: process.env.WEBHOOK_SIGNING_SECRET,
+  FEATURE_WEBHOOKS: process.env.FEATURE_WEBHOOKS !== "off"
 };
 
 // ================= MIDDLEWARE =================
 app.use(helmet());
 app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
-app.use(express.json({ limit: "100kb" }));
+app.use(express.json({ limit: "150kb" }));
 app.use(timeout("10s"));
 app.use((req, res, next) => (req.timedout ? null : next()));
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
 
-// ================= REQUEST ID =================
+// ================= REQUEST ID + METRICS =================
+const metrics = { total: 0, byPath: {}, latencyMs: [] };
 app.use((req, res, next) => {
+  const start = Date.now();
+  metrics.total++;
+  metrics.byPath[req.path] = (metrics.byPath[req.path] || 0) + 1;
+  res.on("finish", () => metrics.latencyMs.push(Date.now() - start));
   req.id = crypto.randomUUID();
   next();
 });
 
 // ================= SUPABASE =================
-const supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
+const supabase = createClient(
+  CONFIG.SUPABASE_URL,
+  CONFIG.SUPABASE_KEY
+);
 
 // ================= HELPERS =================
 const ok = (res, data) => res.json({ success: true, data });
-const fail = (res, code, msg) =>
-  res.status(code).json({ success: false, error: msg });
-
-async function audit(user_id, event, meta = {}) {
-  try {
-    await supabase.from("audit_logs").insert({
-      user_id,
-      event,
-      meta,
-      at: new Date().toISOString()
-    });
-  } catch (_) {}
-}
+const fail = (res, code, msg, type = "generic") =>
+  res.status(code).json({ success: false, error: msg, type });
 
 // ================= API VERSION =================
 const v1 = express.Router();
@@ -69,7 +73,7 @@ app.use("/v1", v1);
 async function apiAuth(req, res, next) {
   const api_key = req.headers["x-api-key"];
   const game_id = req.headers["x-game-id"];
-  if (!api_key || !game_id) return fail(res, 401, "Missing API key");
+  if (!api_key || !game_id) return fail(res, 401, "Missing API key", "auth");
 
   const { data } = await supabase
     .from("api_keys")
@@ -79,167 +83,142 @@ async function apiAuth(req, res, next) {
     .eq("revoked", false)
     .maybeSingle();
 
-  if (!data) return fail(res, 401, "Invalid API key");
+  if (!data) return fail(res, 401, "Invalid API key", "auth");
   req.game_id = game_id;
   next();
 }
 
-// ================= ORG + RBAC =================
-async function orgGuard(req, res, next) {
-  const user_id = req.headers["x-user-id"];
-  const org_id = req.headers["x-org-id"];
-  if (!user_id || !org_id) return fail(res, 401, "Missing org context");
-
-  const { data } = await supabase
-    .from("org_members")
-    .select("role")
-    .eq("org_id", org_id)
-    .eq("user_id", user_id)
-    .maybeSingle();
-
-  if (!data) return fail(res, 403, "Not org member");
-
-  req.user_id = user_id;
-  req.org_id = org_id;
-  req.role = data.role;
-  next();
+// ================= IDEMPOTENCY (STEP 112) =================
+const idempoCache = new Map(); // key -> response
+const IDEMPO_TTL = 5 * 60 * 1000;
+function getIdempo(key) {
+  const v = idempoCache.get(key);
+  if (!v) return null;
+  if (Date.now() - v.ts > IDEMPO_TTL) {
+    idempoCache.delete(key);
+    return null;
+  }
+  return v.res;
+}
+function setIdempo(key, res) {
+  idempoCache.set(key, { res, ts: Date.now() });
 }
 
-function requireRole(roles = []) {
-  return (req, res, next) =>
-    roles.includes(req.role)
-      ? next()
-      : fail(res, 403, "Insufficient role");
-}
-
-// ================= HEALTH =================
+// ================= HEALTH / READY (STEP 117) =================
 v1.get("/", (_, res) => ok(res, { status: "LaunchSense v1 live" }));
+v1.get("/ready", async (_, res) => ok(res, { ready: true }));
 
-// ================= ORG CREATE (STEP 101) =================
-v1.post("/orgs", async (req, res) => {
+// ================= PUBLIC SDK — DECISION (STEP 111) =================
+v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
-    const { user_id, name } = req.body;
-    if (!user_id || !name) return fail(res, 400, "Invalid payload");
+    const idem = req.headers["x-idempotency-key"];
+    if (idem) {
+      const cached = getIdempo(idem);
+      if (cached) return res.json(cached);
+    }
 
-    const org_id = "org_" + Date.now();
-    await supabase.from("orgs").insert({ org_id, name });
-    await supabase.from("org_members").insert({
-      org_id,
-      user_id,
-      role: "owner"
+    const risk = calculateRiskScore(req.body);
+    const decision = getDecision(risk);
+
+    await supabase.from("game_sessions").insert({
+      ...req.body,
+      game_id: req.game_id,
+      risk_score: risk,
+      decision
     });
 
-    await audit(user_id, "org.created", { org_id });
-    ok(res, { org_id, name });
+    const payload = { success: true, data: { risk_score: risk, decision } };
+    if (idem) setIdempo(idem, payload);
+
+    // STEP 113–114: webhook emit (decision)
+    if (CONFIG.FEATURE_WEBHOOKS) emitWebhook("decision.created", {
+      game_id: req.game_id,
+      risk_score: risk,
+      decision
+    });
+
+    res.json(payload);
   } catch {
-    fail(res, 500, "Org create failed");
+    fail(res, 500, "Decision failed", "processing");
   }
 });
 
-// ================= PROJECT LIST (STEP 106,109) =================
-v1.get("/orgs/:org_id/projects", orgGuard, async (req, res) => {
+// ================= USAGE SNAPSHOT (SDK) =================
+v1.get("/sdk/usage", apiAuth, async (req, res) => {
   try {
-    const page = Number(req.query.page || 1);
-    const size = Number(req.query.size || 20);
-    const from = (page - 1) * size;
-    const to = from + size - 1;
-
+    const month = new Date().toISOString().slice(0, 7);
     const { data } = await supabase
-      .from("projects")
-      .select("*")
-      .eq("org_id", req.org_id)
-      .range(from, to);
+      .from("usage_monthly")
+      .select("sessions")
+      .eq("game_id", req.game_id)
+      .eq("month", month)
+      .maybeSingle();
 
-    ok(res, { page, size, items: data || [] });
+    ok(res, { month, sessions_used: data?.sessions || 0 });
   } catch {
-    fail(res, 500, "List failed");
+    fail(res, 500, "Usage failed", "processing");
   }
 });
 
-// ================= ADD MEMBER (STEP 108) =================
-v1.post(
-  "/orgs/:org_id/members",
-  orgGuard,
-  requireRole(["owner", "admin"]),
-  async (req, res) => {
-    try {
-      const { user_id, role } = req.body;
-      if (!user_id || !role) return fail(res, 400, "Invalid payload");
+// ================= WEBHOOKS (STEP 113–114) =================
+async function emitWebhook(event, payload) {
+  const { data } = await supabase
+    .from("webhooks")
+    .select("id,url")
+    .eq("active", true);
 
-      await supabase.from("org_members").insert({
-        org_id: req.org_id,
-        user_id,
-        role
-      });
+  if (!data || data.length === 0) return;
 
-      await audit(req.user_id, "org.member.added", { user_id, role });
-      ok(res, { added: true });
-    } catch {
-      fail(res, 500, "Add member failed");
-    }
+  for (const wh of data) {
+    const body = JSON.stringify({ event, payload, at: Date.now() });
+    const sig = crypto
+      .createHmac("sha256", CONFIG.WEBHOOK_SECRET)
+      .update(body)
+      .digest("hex");
+
+    // fire-and-forget; record attempt
+    await supabase.from("webhook_events").insert({
+      webhook_id: wh.id,
+      event,
+      delivered: false
+    });
+
+    fetch(wh.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-signature": sig
+      },
+      body
+    }).catch(() => {});
   }
+}
+
+// ================= API DOCS SCHEMA (STEP 115) =================
+v1.get("/docs/schema", (_, res) =>
+  ok(res, {
+    version: "v1",
+    endpoints: {
+      "POST /v1/sdk/decision": {
+        headers: ["x-api-key", "x-game-id", "x-idempotency-key?"],
+        body: ["playtime", "deaths", "restarts", "early_quit", "player_id", "session_id"]
+      },
+      "GET /v1/sdk/usage": { headers: ["x-api-key", "x-game-id"] }
+    }
+  })
 );
 
-// ================= PROJECT MEMBERS (STEP 103–104) =================
-v1.post(
-  "/projects/:game_id/members",
-  orgGuard,
-  requireRole(["owner", "admin"]),
-  async (req, res) => {
-    try {
-      const { user_id, role } = req.body;
-      await supabase.from("project_members").insert({
-        game_id: req.params.game_id,
-        user_id,
-        role
-      });
-      await audit(req.user_id, "project.member.added", {
-        game_id: req.params.game_id,
-        user_id,
-        role
-      });
-      ok(res, { added: true });
-    } catch {
-      fail(res, 500, "Project member add failed");
-    }
-  }
+// ================= OBSERVABILITY (STEP 116) =================
+v1.get("/metrics", (_, res) =>
+  ok(res, {
+    total_requests: metrics.total,
+    by_path: metrics.byPath,
+    avg_latency_ms:
+      metrics.latencyMs.length
+        ? Math.round(metrics.latencyMs.reduce((a, b) => a + b, 0) / metrics.latencyMs.length)
+        : 0
+  })
 );
-
-// ================= DASHBOARD KPIs (STEP 107) =================
-v1.get(
-  "/dashboard/kpis/:game_id",
-  apiAuth,
-  async (req, res) => {
-    try {
-      const { data } = await supabase
-        .from("daily_analytics")
-        .select("*")
-        .eq("game_id", req.params.game_id)
-        .order("date", { ascending: false })
-        .limit(7);
-
-      if (!data || data.length === 0)
-        return ok(res, { sessions: 0, avg_risk: 0, health: "ITERATE" });
-
-      const total = data.reduce((s, d) => s + d.total_sessions, 0);
-      const avgRisk = Math.round(
-        data.reduce((s, d) => s + d.avg_risk, 0) / data.length
-      );
-
-      ok(res, {
-        days: data.length,
-        total_sessions: total,
-        avg_risk: avgRisk
-      });
-    } catch {
-      fail(res, 500, "KPI fetch failed");
-    }
-  }
-);
-
-// ================= SAFE SHUTDOWN =================
-process.on("SIGTERM", () => process.exit(0));
-process.on("SIGINT", () => process.exit(0));
 
 // ================= START =================
 app.listen(CONFIG.PORT, () => {
