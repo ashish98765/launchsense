@@ -1,4 +1,4 @@
-// LaunchSense Backend — STEP 81 to STEP 90 (SaaS Governance Layer)
+// LaunchSense Backend — STEP 91 to STEP 100 (Billing + Plans + Usage)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -15,7 +15,7 @@ const app = express();
 app.disable("x-powered-by");
 
 // ================= CONFIG =================
-["SUPABASE_URL", "SUPABASE_SERVICE_KEY", "PORT"].forEach(k => {
+["SUPABASE_URL", "SUPABASE_SERVICE_KEY", "PORT", "BILLING_WEBHOOK_SECRET"].forEach(k => {
   if (!process.env[k]) {
     console.error("Missing ENV:", k);
     process.exit(1);
@@ -25,15 +25,16 @@ app.disable("x-powered-by");
 const CONFIG = {
   PORT: process.env.PORT,
   SUPABASE_URL: process.env.SUPABASE_URL,
-  SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY
+  SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
+  WEBHOOK_SECRET: process.env.BILLING_WEBHOOK_SECRET
 };
 
 // ================= SECURITY =================
 app.use(helmet());
 app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
-app.use(express.json({ limit: "50kb" }));
+app.use(express.json({ limit: "100kb" }));
 app.use(timeout("10s"));
-app.use((req, res, next) => req.timedout ? null : next());
+app.use((req, res, next) => (req.timedout ? null : next()));
 
 // ================= REQUEST ID =================
 app.use((req, res, next) => {
@@ -41,7 +42,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ================= BASE RATE LIMIT =================
+// ================= RATE LIMIT =================
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
 
 // ================= SUPABASE =================
@@ -79,84 +80,50 @@ async function apiAuth(req, res, next) {
 async function projectGuard(req, res, next) {
   const { data } = await supabase
     .from("projects")
-    .select("status, deleted")
+    .select("status, deleted, plan")
     .eq("game_id", req.game_id)
     .maybeSingle();
 
-  if (!data || data.deleted)
-    return fail(res, 403, "Project deleted");
+  if (!data || data.deleted) return fail(res, 403, "Project deleted");
+  if (data.status !== "active") return fail(res, 403, "Project inactive");
 
-  if (data.status !== "active")
-    return fail(res, 403, "Project inactive");
-
+  req.plan = data.plan || "free";
   next();
 }
 
-// ================= PER PROJECT LIMIT =================
-const projectLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 120,
-  keyGenerator: req => req.game_id
-});
+// ================= PLAN LIMITS (STEP 91–94) =================
+const PLAN_LIMITS = {
+  free: { monthly_sessions: 10000, hard_stop: true },
+  pro: { monthly_sessions: 200000, hard_stop: false }
+};
+
+async function usageGuard(req, res, next) {
+  const month = new Date().toISOString().slice(0, 7);
+  const { data } = await supabase
+    .from("usage_monthly")
+    .select("sessions")
+    .eq("game_id", req.game_id)
+    .eq("month", month)
+    .maybeSingle();
+
+  const used = data?.sessions || 0;
+  const limit = PLAN_LIMITS[req.plan].monthly_sessions;
+
+  if (used >= limit) {
+    return fail(res, 402, "Monthly quota exceeded");
+  }
+  next();
+}
 
 // ================= HEALTH =================
 v1.get("/", (_, res) => ok(res, { status: "LaunchSense v1 live" }));
 
-// ================= CREATE PROJECT =================
-v1.post("/projects", async (req, res) => {
-  try {
-    const { user_id, name } = req.body;
-    if (!user_id || !name) return fail(res, 400, "Invalid payload");
-
-    const game_id = "game_" + Date.now();
-    const api_key = "ls_" + crypto.randomBytes(24).toString("hex");
-
-    const { data: project, error } = await supabase
-      .from("projects")
-      .insert({
-        user_id,
-        name,
-        game_id,
-        status: "active",
-        deleted: false
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    await supabase.from("api_keys").insert({
-      game_id,
-      api_key,
-      revoked: false
-    });
-
-    ok(res, { project, api_key });
-  } catch {
-    fail(res, 500, "Create project failed");
-  }
-});
-
-// ================= SOFT DELETE PROJECT (STEP 83) =================
-v1.post("/projects/:game_id/delete", async (req, res) => {
-  try {
-    await supabase
-      .from("projects")
-      .update({ deleted: true })
-      .eq("game_id", req.params.game_id);
-
-    ok(res, { deleted: true });
-  } catch {
-    fail(res, 500, "Delete failed");
-  }
-});
-
-// ================= DECISION API =================
+// ================= DECISION API (METERED) =================
 v1.post(
   "/decision",
   apiAuth,
   projectGuard,
-  projectLimiter,
+  usageGuard,
   async (req, res) => {
     try {
       const risk = calculateRiskScore(req.body);
@@ -169,6 +136,29 @@ v1.post(
         decision
       });
 
+      // STEP 92: usage metering
+      const month = new Date().toISOString().slice(0, 7);
+      const { data } = await supabase
+        .from("usage_monthly")
+        .select("sessions")
+        .eq("game_id", req.game_id)
+        .eq("month", month)
+        .maybeSingle();
+
+      if (!data) {
+        await supabase.from("usage_monthly").insert({
+          game_id: req.game_id,
+          month,
+          sessions: 1
+        });
+      } else {
+        await supabase
+          .from("usage_monthly")
+          .update({ sessions: data.sessions + 1 })
+          .eq("game_id", req.game_id)
+          .eq("month", month);
+      }
+
       ok(res, { risk_score: risk, decision });
     } catch {
       fail(res, 500, "Decision failed");
@@ -176,49 +166,59 @@ v1.post(
   }
 );
 
-// ================= AUDIT LOG (STEP 85) =================
-async function audit(event, meta = {}) {
-  await supabase.from("audit_logs").insert({
-    event,
-    meta,
-    at: new Date().toISOString()
-  });
-}
-
-// ================= ANALYTICS SUMMARY =================
-v1.get("/projects/:game_id/summary", async (req, res) => {
+// ================= USAGE SNAPSHOT (STEP 98) =================
+v1.get("/usage/:game_id", async (req, res) => {
   try {
+    const { game_id } = req.params;
     const { data } = await supabase
-      .from("daily_analytics")
+      .from("usage_monthly")
       .select("*")
-      .eq("game_id", req.params.game_id);
-
-    if (!data || data.length === 0)
-      return ok(res, { total_sessions: 0 });
+      .eq("game_id", game_id)
+      .order("month", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     ok(res, {
-      days: data.length,
-      total_sessions: data.reduce((s, d) => s + d.total_sessions, 0),
-      avg_risk:
-        Math.round(
-          data.reduce((s, d) => s + d.avg_risk, 0) / data.length
-        ) || 0
+      game_id,
+      current_month: data?.month || null,
+      sessions_used: data?.sessions || 0
     });
   } catch {
-    fail(res, 500, "Analytics failed");
+    fail(res, 500, "Usage fetch failed");
   }
 });
 
-// ================= SAFE SHUTDOWN (STEP 90) =================
-process.on("SIGTERM", () => {
-  console.log("Graceful shutdown");
-  process.exit(0);
+// ================= BILLING WEBHOOK (STEP 95–97) =================
+v1.post("/billing/webhook", express.raw({ type: "*/*" }), async (req, res) => {
+  try {
+    const sig = req.headers["x-signature"];
+    const body = req.body.toString();
+
+    const expected = crypto
+      .createHmac("sha256", CONFIG.WEBHOOK_SECRET)
+      .update(body)
+      .digest("hex");
+
+    if (sig !== expected) return fail(res, 401, "Invalid signature");
+
+    const event = JSON.parse(body);
+
+    if (event.type === "plan.updated") {
+      await supabase
+        .from("projects")
+        .update({ plan: event.plan })
+        .eq("game_id", event.game_id);
+    }
+
+    ok(res, { received: true });
+  } catch {
+    fail(res, 400, "Webhook failed");
+  }
 });
 
-process.on("SIGINT", () => {
-  console.log("Interrupted");
-  process.exit(0);
-});
+// ================= SAFE SHUTDOWN =================
+process.on("SIGTERM", () => process.exit(0));
+process.on("SIGINT", () => process.exit(0));
 
 // ================= START =================
 app.listen(CONFIG.PORT, () => {
