@@ -1,4 +1,4 @@
-// LaunchSense Backend — Production Final
+// LaunchSense Backend — Phase 1 Intelligence Upgrade (Production Safe)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -9,124 +9,90 @@ const rateLimit = require("express-rate-limit");
 require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
-const { calculateRiskScore, getDecision } = require("./decisionEngine");
 
 const app = express();
 app.disable("x-powered-by");
 
-/* =======================
-   REQUIRED ENV ONLY
-======================= */
+/* ============================
+   REQUIRED ENV
+============================ */
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach(k => {
   if (!process.env[k]) {
-    console.error("Missing REQUIRED ENV:", k);
+    console.error("Missing ENV:", k);
     process.exit(1);
   }
 });
 
-/* =======================
-   CONFIG (SAFE DEFAULTS)
-======================= */
+/* ============================
+   CONFIG
+============================ */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
-
-  ADMIN_TOKEN: process.env.ADMIN_TOKEN || null,
-  RETENTION_DAYS: Number(process.env.RETENTION_DAYS || 30),
-  SLA_MAX_LATENCY_MS: Number(process.env.SLA_MAX_LATENCY_MS || 1500),
-  READONLY: process.env.FEATURE_READONLY === "on",
-
-  VERSION: "1.0.0"
+  VERSION: "1.1.0-intelligence",
 };
 
-/* =======================
+/* ============================
    MIDDLEWARE
-======================= */
+============================ */
 app.use(helmet());
 app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
 app.use(express.json({ limit: "200kb" }));
 app.use(timeout("10s"));
 app.use((req, res, next) => (req.timedout ? null : next()));
 
-/* =======================
-   RATE LIMITING
-======================= */
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 600 }));
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 600,
+  })
+);
 
-/* =======================
-   REQUEST ID + SLA
-======================= */
 app.use((req, res, next) => {
-  const start = Date.now();
-  req.id = crypto.randomUUID();
-
+  req.req_id = crypto.randomUUID();
+  req._start = Date.now();
   res.on("finish", () => {
-    const ms = Date.now() - start;
-    if (ms > CONFIG.SLA_MAX_LATENCY_MS) {
-      console.warn("SLA breach", { path: req.path, ms });
-    }
+    const ms = Date.now() - req._start;
+    if (ms > 1500) console.warn("SLOW:", req.path, ms);
   });
-
   next();
 });
 
-/* =======================
+/* ============================
    SUPABASE
-======================= */
+============================ */
 const supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
 
-/* =======================
+/* ============================
    HELPERS
-======================= */
+============================ */
 const ok = (res, data) => res.json({ success: true, data });
 const fail = (res, code, msg) =>
   res.status(code).json({ success: false, error: msg });
 
-/* =======================
-   ADMIN AUTH (OPTIONAL)
-======================= */
-function adminAuth(req, res, next) {
-  if (!CONFIG.ADMIN_TOKEN) return fail(res, 503, "Admin disabled");
-  const t = req.headers["x-admin-token"];
-  if (t !== CONFIG.ADMIN_TOKEN) return fail(res, 401, "Admin auth failed");
-  next();
-}
-
-/* =======================
+/* ============================
    VERSIONED API
-======================= */
+============================ */
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* =======================
+/* ============================
    HEALTH
-======================= */
+============================ */
 v1.get("/", (_, res) =>
   ok(res, { status: "LaunchSense live", version: CONFIG.VERSION })
 );
-v1.get("/ready", (_, res) =>
-  ok(res, { ready: true, readonly: CONFIG.READONLY })
-);
 
-/* =======================
-   READONLY GUARD
-======================= */
-app.use((req, res, next) => {
-  if (CONFIG.READONLY && req.method !== "GET") {
-    return fail(res, 503, "Maintenance mode");
-  }
-  next();
-});
-
-/* =======================
+/* ============================
    API KEY AUTH
-======================= */
+============================ */
 async function apiAuth(req, res, next) {
   const api_key = req.headers["x-api-key"];
   const game_id = req.headers["x-game-id"];
-  if (!api_key || !game_id) return fail(res, 401, "Missing API key");
+
+  if (!api_key || !game_id)
+    return fail(res, 401, "Missing API credentials");
 
   const { data } = await supabase
     .from("api_keys")
@@ -142,107 +108,99 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-/* =======================
-   CORE DECISION API
-======================= */
+/* ============================
+   🧠 INTELLIGENCE ENGINE
+============================ */
+function buildSignals(payload) {
+  const {
+    playtime = 0,
+    deaths = 0,
+    restarts = 0,
+    early_quit = false,
+  } = payload;
+
+  const engagement = Math.min(playtime / 600, 1);
+  const frustration = Math.min((deaths * 2 + restarts) / 10, 1);
+  const volatility = early_quit ? 0.7 : 0.2;
+
+  return {
+    engagement,
+    frustration,
+    volatility,
+    early_quit: early_quit ? 1 : 0,
+  };
+}
+
+function scoreDecision(signals) {
+  const weights = {
+    engagement: 0.35,
+    frustration: 0.35,
+    volatility: 0.2,
+    early_quit: 0.1,
+  };
+
+  let risk =
+    (1 - signals.engagement) * weights.engagement +
+    signals.frustration * weights.frustration +
+    signals.volatility * weights.volatility +
+    signals.early_quit * weights.early_quit;
+
+  risk = Math.min(Math.max(risk, 0), 1);
+
+  let decision = "ITERATE";
+  if (risk < 0.35) decision = "GO";
+  if (risk > 0.65) decision = "KILL";
+
+  const confidence = Math.round((1 - Math.abs(0.5 - risk)) * 100) / 100;
+
+  const reasons = [];
+  if (signals.engagement < 0.4) reasons.push("Low engagement");
+  if (signals.frustration > 0.6) reasons.push("High frustration");
+  if (signals.early_quit) reasons.push("Early quit pattern");
+  if (signals.volatility > 0.5) reasons.push("Volatile behavior");
+
+  return {
+    risk_score: Math.round(risk * 100),
+    decision,
+    confidence,
+    signals,
+    reasons,
+  };
+}
+
+/* ============================
+   CORE DECISION API (UPGRADED)
+============================ */
 v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
-    const risk = calculateRiskScore(req.body);
-    const decision = getDecision(risk);
+    const signals = buildSignals(req.body);
+    const result = scoreDecision(signals);
 
     await supabase.from("game_sessions").insert({
-      ...req.body,
       game_id: req.game_id,
-      risk_score: risk,
-      decision
+      ...req.body,
+      risk_score: result.risk_score,
+      decision: result.decision,
+      confidence: result.confidence,
+      signals,
     });
 
-    ok(res, { risk_score: risk, decision });
-  } catch {
-    fail(res, 500, "Decision failed");
+    ok(res, result);
+  } catch (e) {
+    console.error(e);
+    fail(res, 500, "Decision engine failed");
   }
 });
 
-/* =======================
-   ADMIN — LIST PROJECTS
-======================= */
-v1.get("/admin/projects", adminAuth, async (req, res) => {
-  const q = req.query.q || "";
-  const { data } = await supabase
-    .from("projects")
-    .select("*")
-    .ilike("name", `%${q}%`)
-    .limit(200);
-
-  ok(res, { items: data || [] });
-});
-
-/* =======================
-   ADMIN — EXPORT DATA
-======================= */
-v1.get("/admin/export/:game_id", adminAuth, async (req, res) => {
-  const format = (req.query.format || "json").toLowerCase();
-
-  const { data } = await supabase
-    .from("game_sessions")
-    .select("*")
-    .eq("game_id", req.params.game_id)
-    .limit(50000);
-
-  if (format === "csv") {
-    const keys = Object.keys(data?.[0] || {});
-    const rows = [
-      keys.join(","),
-      ...(data || []).map(r => keys.map(k => JSON.stringify(r[k] ?? "")).join(","))
-    ];
-    res.setHeader("content-type", "text/csv");
-    return res.send(rows.join("\n"));
-  }
-
-  ok(res, { items: data || [] });
-});
-
-/* =======================
-   ADMIN — RETENTION
-======================= */
-v1.post("/admin/retention/run", adminAuth, async (_, res) => {
-  const cutoff = new Date(
-    Date.now() - CONFIG.RETENTION_DAYS * 86400000
-  ).toISOString();
-
-  await supabase.from("game_sessions").delete().lt("created_at", cutoff);
-  await supabase
-    .from("daily_analytics")
-    .delete()
-    .lt("date", cutoff.slice(0, 10));
-
-  ok(res, { retained_days: CONFIG.RETENTION_DAYS });
-});
-
-/* =======================
-   LAUNCH CHECK
-======================= */
-v1.get("/admin/launch-check", adminAuth, async (_, res) => {
-  ok(res, {
-    env: true,
-    db: true,
-    auth: true,
-    analytics: true,
-    retention: true,
-    sla: true,
-    ready: true
-  });
-});
-
-/* =======================
+/* ============================
    SHUTDOWN
-======================= */
-process.on("SIGTERM", () => process.exit(0));
-process.on("SIGINT", () => process.exit(0));
+============================ */
+process.on("SIGTERM", () => process.exit());
+process.on("SIGINT", () => process.exit());
 
-/* =======================
+/* ============================
    START
-======================= */
+============================ */
 app.listen(CONFIG.PORT, () => {
   console.log(`LaunchSense ${CONFIG.VERSION} running on`, CONFIG.PORT);
 });
