@@ -6,10 +6,10 @@ export default function Home() {
         <div style={styles.navInner}>
           <div style={styles.logo}>LaunchSense</div>
           <nav style={styles.menu}>
-            <a href="#how" style={styles.navLink}>How it works</a>
+            <a href="#product" style={styles.navLink}>Product</a>
             <a href="#example" style={styles.navLink}>Example</a>
             <a href="#pricing" style={styles.navLink}>Pricing</a>
-            <a href="/demo" style={styles.primaryBtn}>Try demo</a>
+            <a href="/signup" style={styles.ctaNav}>Analyze a build</a>
           </nav>
         </div>
       </header>
@@ -17,102 +17,133 @@ export default function Home() {
       {/* HERO */}
       <section style={styles.hero}>
         <h1 style={styles.heroTitle}>
-          Detect unviable games <span style={styles.muted}>before months are wasted</span>
+          Some games are already failing.
+          <br />
+          <span style={styles.heroMuted}>
+            You just don’t see it yet.
+          </span>
         </h1>
 
         <p style={styles.heroSub}>
-          LaunchSense analyzes early gameplay behaviour from test builds
-          and highlights risk patterns — so teams decide <b>early</b>, not emotionally.
+          LaunchSense inspects early gameplay behaviour from test builds
+          and surfaces risk patterns — so teams decide before time, money,
+          and morale are locked in.
         </p>
 
         <div style={styles.heroCta}>
-          <a href="/signup" style={styles.primaryBtnLarge}>
+          <a href="/signup" style={styles.primaryBtn}>
             Analyze a test build
           </a>
           <a href="#example" style={styles.secondaryBtn}>
-            See example analysis →
+            View example output →
           </a>
         </div>
       </section>
 
-      {/* BUILT FOR */}
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>Built for</h2>
-        <ul style={styles.list}>
-          <li>Indie game studios</li>
-          <li>Small & mid-size game teams</li>
-          <li>Mobile & PC game developers</li>
-        </ul>
-      </section>
+      {/* WHAT IT DETECTS */}
+      <section id="product" style={styles.section}>
+        <h2 style={styles.sectionTitle}>
+          What LaunchSense actually detects
+        </h2>
 
-      {/* PROBLEM */}
-      <section style={styles.sectionAlt}>
-        <h2 style={styles.sectionTitle}>The problem with game development</h2>
-        <p style={styles.text}>
-          Most games rely on instinct and hope.  
-          After months of work, teams realise too late that a game is not viable.
-        </p>
-        <p style={styles.text}>
-          LaunchSense exists to reduce that risk — <b style={{color:"#c58a2c"}}>early</b>,
-          when decisions are still cheap.
-        </p>
-      </section>
+        <div style={styles.grid}>
+          <div style={styles.card}>
+            <h3>Early abandonment</h3>
+            <p>
+              Players leaving before the core loop establishes.
+            </p>
+          </div>
 
-      {/* HOW IT WORKS */}
-      <section id="how" style={styles.section}>
-        <h2 style={styles.sectionTitle}>How LaunchSense works</h2>
-        <ol style={styles.steps}>
-          <li>Run early playtests on a test build</li>
-          <li>Send session data to LaunchSense</li>
-          <li>We detect risk patterns from player behaviour</li>
-          <li><b>You decide</b> what to fix, pause, or rethink</li>
-        </ol>
+          <div style={styles.card}>
+            <h3>Difficulty spikes</h3>
+            <p>
+              Friction that causes repeated deaths or restarts.
+            </p>
+          </div>
+
+          <div style={styles.card}>
+            <h3>False engagement</h3>
+            <p>
+              Playtime that looks healthy but signals confusion.
+            </p>
+          </div>
+        </div>
       </section>
 
       {/* EXAMPLE */}
       <section id="example" style={styles.sectionAlt}>
-        <h2 style={styles.sectionTitle}>Example: early gameplay analysis</h2>
+        <h2 style={styles.sectionTitle}>
+          Example: early gameplay signal
+        </h2>
 
-        <div style={styles.card}>
-          <p><b>Risk level:</b> <span style={{color:"#c0392b"}}>High</span></p>
-          <p><b>Pattern confidence:</b> Medium</p>
+        <div style={styles.output}>
+          <div style={styles.outputHeader}>
+            <span style={styles.riskHigh}>HIGH RISK</span>
+            <span style={styles.confidence}>Confidence: Medium</span>
+          </div>
 
-          <p style={{marginTop:12}}><b>Key signals detected:</b></p>
-          <ul style={styles.cardList}>
-            <li>Players exit within first 3 minutes</li>
-            <li>Repeated early deaths</li>
-            <li>No improvement across sessions</li>
+          <ul style={styles.outputList}>
+            <li>Players exit within first 2–3 minutes</li>
+            <li>Death rate spikes before tutorial completion</li>
+            <li>No session-to-session improvement</li>
           </ul>
 
-          <p style={styles.cardNote}>
-            Example only. Real analysis depends on your own test data.
+          <p style={styles.outputNote}>
+            Interpretation: core loop friction detected early.
+            Iteration recommended before scaling development.
           </p>
         </div>
       </section>
 
-      {/* WHAT IT DOES NOT DO */}
+      {/* WHO IT IS FOR */}
       <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>What LaunchSense does not do</h2>
-        <ul style={styles.list}>
-          <li>It does not predict guaranteed success or failure</li>
-          <li>It does not replace creative judgement</li>
-          <li>It does not force decisions on your team</li>
-        </ul>
-        <p style={styles.note}>
-          LaunchSense highlights early risk — decisions always stay with you.
-        </p>
+        <h2 style={styles.sectionTitle}>
+          Who this is for
+        </h2>
+
+        <div style={styles.split}>
+          <div>
+            <h4>Good fit</h4>
+            <ul>
+              <li>Indie studios validating ideas</li>
+              <li>Small teams before full production</li>
+              <li>Mobile & PC developers running playtests</li>
+            </ul>
+          </div>
+
+          <div>
+            <h4>Not for</h4>
+            <ul>
+              <li>Finished, live games</li>
+              <li>Marketing analytics</li>
+              <li>Guaranteed success predictions</li>
+            </ul>
+          </div>
+        </div>
       </section>
 
-      {/* PRICING */}
-      <section id="pricing" style={styles.sectionAlt}>
-        <h2 style={styles.sectionTitle}>Simple pricing</h2>
-        <p style={styles.text}>
-          Start free. Upgrade only when you need deeper analysis.
-        </p>
-        <p style={styles.text}>
-          No long-term contracts. No forced decisions.
-        </p>
+      {/* HOW TEAMS USE IT */}
+      <section style={styles.sectionAlt}>
+        <h2 style={styles.sectionTitle}>
+          How teams use LaunchSense
+        </h2>
 
+        <ol style={styles.steps}>
+          <li>Run a closed playtest</li>
+          <li>Upload session data</li>
+          <li>Review detected risk signals</li>
+          <li>
+            Decide to iterate, pause, or rethink —
+            <b> before commitment</b>
+          </li>
+        </ol>
+      </section>
+
+      {/* CTA */}
+      <section style={styles.finalCta}>
+        <h2>
+          Don’t let intuition decide months of work.
+        </h2>
         <a href="/signup" style={styles.primaryBtnLarge}>
           Try LaunchSense on a test build
         </a>
@@ -121,12 +152,12 @@ export default function Home() {
       {/* FOOTER */}
       <footer style={styles.footer}>
         <div>
-          <a href="/methodology" style={styles.footerLink}>Methodology</a>
-          <a href="/sdk" style={styles.footerLink}>SDK</a>
-          <a href="/pricing" style={styles.footerLink}>Pricing</a>
+          <a href="/methodology">Methodology</a>
+          <a href="/sdk">SDK</a>
+          <a href="/pricing">Pricing</a>
         </div>
-        <p style={styles.footerNote}>
-          LaunchSense supports decisions. It never replaces creative judgement.
+        <p>
+          LaunchSense highlights risk. Decisions always stay with you.
         </p>
       </footer>
     </div>
@@ -138,16 +169,16 @@ export default function Home() {
 const styles = {
   page: {
     fontFamily: "Inter, system-ui, sans-serif",
-    color: "#111",
-    background: "#fafafa"
+    background: "#F9FAFB",
+    color: "#0F172A",
   },
 
   nav: {
     position: "sticky",
     top: 0,
-    background: "#fafafa",
-    borderBottom: "1px solid #eee",
-    zIndex: 10
+    background: "#F9FAFB",
+    borderBottom: "1px solid #E5E7EB",
+    zIndex: 10,
   },
   navInner: {
     maxWidth: 1100,
@@ -155,140 +186,161 @@ const styles = {
     padding: "16px 24px",
     display: "flex",
     justifyContent: "space-between",
-    alignItems: "center"
+    alignItems: "center",
   },
   logo: {
     fontWeight: 700,
-    fontSize: 18
+    fontSize: 18,
   },
   menu: {
     display: "flex",
     gap: 20,
-    alignItems: "center"
+    alignItems: "center",
   },
   navLink: {
     textDecoration: "none",
-    color: "#555",
-    fontSize: 14
+    color: "#475569",
+    fontSize: 14,
+  },
+  ctaNav: {
+    background: "#2563EB",
+    color: "#fff",
+    padding: "8px 14px",
+    borderRadius: 8,
+    textDecoration: "none",
+    fontSize: 14,
   },
 
   hero: {
     maxWidth: 900,
     margin: "0 auto",
-    padding: "80px 24px 64px"
+    padding: "96px 24px 72px",
   },
   heroTitle: {
     fontSize: 48,
     lineHeight: 1.1,
-    marginBottom: 16
+    marginBottom: 20,
   },
-  muted: {
-    color: "#666"
+  heroMuted: {
+    color: "#64748B",
   },
   heroSub: {
     fontSize: 18,
-    color: "#555",
-    maxWidth: 700,
-    marginBottom: 32
+    color: "#475569",
+    maxWidth: 720,
+    marginBottom: 36,
   },
   heroCta: {
     display: "flex",
     gap: 16,
-    flexWrap: "wrap"
+    flexWrap: "wrap",
   },
 
   section: {
     maxWidth: 900,
     margin: "0 auto",
-    padding: "64px 24px"
+    padding: "72px 24px",
   },
   sectionAlt: {
-    background: "#f3f3f3",
-    padding: "64px 24px"
+    background: "#F1F5F9",
+    padding: "72px 24px",
   },
   sectionTitle: {
     fontSize: 28,
-    marginBottom: 16
+    marginBottom: 24,
   },
 
-  list: {
-    color: "#444",
-    lineHeight: 1.8
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px,1fr))",
+    gap: 20,
   },
-  steps: {
-    color: "#444",
-    lineHeight: 1.8,
-    paddingLeft: 20
-  },
-
   card: {
-    maxWidth: 500,
     background: "#fff",
     padding: 24,
     borderRadius: 12,
-    border: "1px solid #e5e5e5"
-  },
-  cardList: {
-    paddingLeft: 20,
-    color: "#444"
-  },
-  cardNote: {
-    fontSize: 13,
-    color: "#777",
-    marginTop: 12
+    border: "1px solid #E5E7EB",
   },
 
-  text: {
-    color: "#444",
-    maxWidth: 700,
-    marginBottom: 12
+  output: {
+    maxWidth: 520,
+    background: "#fff",
+    border: "1px solid #E5E7EB",
+    borderRadius: 12,
+    padding: 24,
   },
-  note: {
+  outputHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  riskHigh: {
+    color: "#D97706",
+    fontWeight: 700,
+  },
+  confidence: {
+    fontSize: 13,
+    color: "#64748B",
+  },
+  outputList: {
+    paddingLeft: 20,
+    color: "#475569",
+  },
+  outputNote: {
+    marginTop: 12,
     fontSize: 14,
-    color: "#666",
-    marginTop: 12
+    color: "#475569",
+  },
+
+  split: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 32,
+  },
+
+  steps: {
+    maxWidth: 640,
+    lineHeight: 1.9,
+    color: "#475569",
+  },
+
+  finalCta: {
+    textAlign: "center",
+    padding: "96px 24px",
   },
 
   primaryBtn: {
-    background: "#111",
-    color: "#fff",
-    padding: "8px 14px",
-    borderRadius: 8,
-    textDecoration: "none",
-    fontSize: 14
-  },
-  primaryBtnLarge: {
-    display: "inline-block",
-    background: "#111",
+    background: "#2563EB",
     color: "#fff",
     padding: "14px 24px",
     borderRadius: 10,
     textDecoration: "none",
     fontSize: 16,
-    marginTop: 16
+  },
+  primaryBtnLarge: {
+    background: "#2563EB",
+    color: "#fff",
+    padding: "16px 32px",
+    borderRadius: 12,
+    textDecoration: "none",
+    fontSize: 18,
+    display: "inline-block",
+    marginTop: 20,
   },
   secondaryBtn: {
+    border: "1px solid #CBD5E1",
     padding: "14px 20px",
-    border: "1px solid #ccc",
     borderRadius: 10,
     textDecoration: "none",
-    color: "#333",
-    fontSize: 16
+    color: "#334155",
+    fontSize: 16,
   },
 
   footer: {
-    borderTop: "1px solid #eee",
-    padding: "32px 24px",
+    borderTop: "1px solid #E5E7EB",
+    padding: "40px 24px",
     textAlign: "center",
-    color: "#666"
+    color: "#64748B",
+    fontSize: 14,
   },
-  footerLink: {
-    margin: "0 12px",
-    textDecoration: "none",
-    color: "#555"
-  },
-  footerNote: {
-    fontSize: 13,
-    marginTop: 12
-  }
 };
