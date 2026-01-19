@@ -1,17 +1,34 @@
-// LaunchSense Backend — Hardened Version
+// LaunchSense Backend — STEP 38 (Rate Limiting Added)
 
 const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 
+const rateLimit = require("express-rate-limit");
 const { createClient } = require("@supabase/supabase-js");
+
 const { calculateRiskScore, getDecision } = require("./decisionEngine");
 const { createProjectSchema, decisionSchema } = require("./validators");
 
 const app = express();
+
+// ---------------- BASIC MIDDLEWARE ----------------
 app.use(cors());
 app.use(express.json());
+
+// ---------------- STEP 38 — GLOBAL RATE LIMITER ----------------
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // 100 requests per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: "Too many requests. Please slow down."
+  }
+});
+
+app.use(globalLimiter);
 
 // ---------------- SUPABASE ----------------
 const supabase = createClient(
@@ -39,7 +56,7 @@ async function verifyApiKey(game_id, api_key) {
   return !!data;
 }
 
-// ---------------- MIDDLEWARE ----------------
+// ---------------- API KEY MIDDLEWARE ----------------
 async function apiKeyMiddleware(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   const gameId = req.headers["x-game-id"];
@@ -232,8 +249,8 @@ app.get("/api/analytics/:game_id", apiKeyMiddleware, async (req, res) => {
   }
 });
 
-// ================= START =================
+// ================= START SERVER =================
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log("LaunchSense backend running on", PORT);
+  console.log("LaunchSense backend running on port", PORT);
 });
