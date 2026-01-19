@@ -66,6 +66,43 @@ export default function Home() {
         </ul>
       </section>
 
+        {/* HOW IT WORKS */}
+      <section style={{ marginTop: 80, marginBottom: 48 }}>
+        <h2>How LaunchSense works</h2>
+        <ol style={{ color: "#555" }}>
+          <li>Share early gameplay behaviour from test builds</li>
+          <li>LaunchSense analyzes patterns that indicate risk</li>
+          <li>
+            <strong>You decide</strong> what to fix, pause, or rethink — early
+          </li>
+        </ol>
+      </section>
+
+      {/* WHAT IT DOES NOT DO */}
+      <section style={{ marginBottom: 48 }}>
+        <h2>What LaunchSense does not do</h2>
+        <ul style={{ color: "#555" }}>
+          <li>It does not predict guaranteed success or failure</li>
+          <li>It does not replace creative or design judgment</li>
+          <li>It does not force decisions on your team</li>
+        </ul>
+        <p style={{ marginTop: 12, color: "#666" }}>
+          LaunchSense highlights early risk — decisions always stay with your team.
+        </p>
+      </section>
+
+      {/* WHY EARLY DATA MATTERS */}
+      <section style={{ marginBottom: 48 }}>
+        <h2>Why early data matters</h2>
+        <p style={{ color: "#555" }}>
+          Early player behaviour reveals issues long before revenue,
+          ratings, or reviews appear.
+        </p>
+        <p style={{ color: "#555" }}>
+          Catching risk early saves months of work — and team morale.
+        </p>
+      </section>
+
     </main>
   );
 }
