@@ -1,4 +1,4 @@
-// LaunchSense Backend — Batch 2 (Human Override + Decision Ledger)
+// LaunchSense Backend — Batch 3 (Simulation + Data Quality Intelligence)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -26,13 +26,11 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "5.1.0-BATCH2",
+  VERSION: "5.2.0-BATCH3",
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
   BASE_GO: 0.35,
-  BASE_KILL: 0.65,
-  DRIFT_THRESHOLD: 0.18,
-  KILL_COOLING_HOURS: 48
+  BASE_KILL: 0.65
 };
 
 /* ================= CORE ================= */
@@ -49,14 +47,6 @@ const supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
 const ok = (res, data) => res.json({ success: true, data });
 const fail = (res, c, m) =>
   res.status(c).json({ success: false, error: m });
-
-async function safeLedgerInsert(payload) {
-  try {
-    await supabase.from("decision_ledger").insert(payload);
-  } catch (_) {
-    // ledger optional for now (SQL later)
-  }
-}
 
 /* ================= AUTH ================= */
 async function apiAuth(req, res, next) {
@@ -82,72 +72,52 @@ async function apiAuth(req, res, next) {
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ================= UTILS ================= */
-function confidenceBand(score) {
-  if (score >= 0.75) return "HIGH";
-  if (score >= 0.5) return "MEDIUM";
-  return "LOW";
-}
+/* ================= DATA QUALITY ================= */
+function assessQuality(body) {
+  let score = 1;
+  const issues = [];
 
-function detectDrift(current, historical) {
-  if (!historical) return false;
-  return Math.abs(current - historical) > CONFIG.DRIFT_THRESHOLD;
+  if (!body.playtime) {
+    score -= 0.3;
+    issues.push("Missing playtime");
+  }
+  if (body.deaths === undefined) {
+    score -= 0.2;
+    issues.push("Missing deaths");
+  }
+  if (body.sessions && body.sessions < 3) {
+    score -= 0.2;
+    issues.push("Low sample size");
+  }
+
+  score = Math.max(score, 0.2);
+
+  return {
+    quality_score: Math.round(score * 100) / 100,
+    issues,
+    reliable: score >= 0.6
+  };
 }
 
 /* ================= DECISION ================= */
 v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
+    const quality = assessQuality(req.body);
     const risk = calculateRiskScore(req.body);
 
-    const { data: history } = await supabase
-      .from("risk_history")
-      .select("avg_risk")
-      .eq("game_id", req.game_id)
-      .maybeSingle();
-
-    const drift = detectDrift(risk, history?.avg_risk);
-
-    let ai_decision = "ITERATE";
-    if (risk < CONFIG.BASE_GO) ai_decision = "GO";
-    if (risk > CONFIG.BASE_KILL) ai_decision = "KILL";
-
-    const confidence_raw = 1 - Math.abs(0.5 - risk);
-    const stability = drift ? 0.4 : 0.85;
-    const confidence =
-      Math.round(confidence_raw * stability * 100) / 100;
-
-    let decision = ai_decision;
-    let kill_pending = false;
-    if (decision === "KILL") {
-      decision = "KILL_PENDING";
-      kill_pending = true;
-    }
+    let decision = "ITERATE";
+    if (risk < CONFIG.BASE_GO) decision = "GO";
+    if (risk > CONFIG.BASE_KILL) decision = "KILL";
 
     const counterfactuals = buildCounterfactuals({ risk });
 
-    // Ledger: AI decision
-    await safeLedgerInsert({
-      id: crypto.randomUUID(),
-      game_id: req.game_id,
-      source: "AI",
-      ai_decision,
-      final_decision: decision,
-      risk_score: risk,
-      confidence,
-      created_at: new Date().toISOString()
-    });
-
     ok(res, {
       decision,
-      ai_decision,
       risk_score: Math.round(risk * 100),
-      confidence,
-      confidence_band: confidenceBand(confidence),
-      drift_detected: drift,
-      kill_pending,
-      cooling_hours: kill_pending
-        ? CONFIG.KILL_COOLING_HOURS
-        : null,
+      data_quality: quality,
+      decision_reliability: quality.reliable
+        ? "HIGH"
+        : "LOW",
       counterfactuals
     });
   } catch (e) {
@@ -156,25 +126,31 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
   }
 });
 
-/* ================= HUMAN OVERRIDE ================= */
-v1.post("/decision/override", apiAuth, async (req, res) => {
-  const { final_decision, reason } = req.body;
-  if (!final_decision || !reason)
-    return fail(res, 400, "Missing override data");
+/* ================= SIMULATION ================= */
+v1.post("/sdk/simulate", apiAuth, async (req, res) => {
+  try {
+    const base = req.body.base;
+    const changes = req.body.changes || {};
 
-  await safeLedgerInsert({
-    id: crypto.randomUUID(),
-    game_id: req.game_id,
-    source: "HUMAN",
-    final_decision,
-    reason,
-    created_at: new Date().toISOString()
-  });
+    if (!base)
+      return fail(res, 400, "Missing base metrics");
 
-  ok(res, {
-    overridden: true,
-    final_decision
-  });
+    const simulated = { ...base, ...changes };
+    const risk = calculateRiskScore(simulated);
+
+    let decision = "ITERATE";
+    if (risk < CONFIG.BASE_GO) decision = "GO";
+    if (risk > CONFIG.BASE_KILL) decision = "KILL";
+
+    ok(res, {
+      simulated_decision: decision,
+      simulated_risk: Math.round(risk * 100),
+      applied_changes: changes
+    });
+  } catch (e) {
+    console.error(e);
+    fail(res, 500, "Simulation failure");
+  }
 });
 
 /* ================= START ================= */
