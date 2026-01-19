@@ -1,124 +1,132 @@
 export default function Home() {
   return (
-    <main style={{ padding: "80px 24px", maxWidth: 900, margin: "0 auto" }}>
+    <main
+      style={{
+        padding: "72px 20px",
+        maxWidth: 720,
+        margin: "0 auto",
+        fontFamily:
+          "-apple-system, BlinkMacSystemFont, Inter, Segoe UI, Roboto, sans-serif",
+        color: "#111",
+      }}
+    >
       {/* HERO */}
-      <h1 style={{ fontSize: 42, marginBottom: 16 }}>
-        Make game decisions with data, not hope.
-      </h1>
-
-      <p style={{ fontSize: 18, color: "#555", marginBottom: 32 }}>
-        LaunchSense analyzes early gameplay behaviour and highlights risk
-        so studios can decide what to build next — calmly and early.
-      </p>
-
-      {/* PRIMARY CTA */}
-      <div style={{ marginBottom: 48 }}>
-        <a
-          href="/signup"
+      <section style={{ marginBottom: 72 }}>
+        <h1
           style={{
-            padding: "12px 20px",
-            background: "#000",
-            color: "#fff",
-            borderRadius: 6,
-            marginRight: 12,
-            textDecoration: "none",
+            fontSize: 44,
+            lineHeight: 1.15,
+            marginBottom: 20,
+            letterSpacing: "-0.02em",
           }}
         >
-          Analyze a test build
-        </a>
+          Detect unviable games
+          <br />
+          <strong>before you waste months building them</strong>
+        </h1>
 
-        <a
-          href="/demo"
-          style={{ color: "#555", textDecoration: "underline" }}
-        >
-          See how decisions work →
-        </a>
-      </div>
+        <p style={{ fontSize: 18, color: "#555", marginBottom: 36 }}>
+          LaunchSense analyzes early gameplay behaviour from test builds
+          and highlights risk patterns — so studios know when to iterate,
+          pause, or kill a game <strong>early</strong>.
+        </p>
+
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+          <a
+            href="/signup"
+            style={{
+              padding: "14px 22px",
+              background: "#000",
+              color: "#fff",
+              borderRadius: 8,
+              textDecoration: "none",
+              fontWeight: 500,
+            }}
+          >
+            Analyze a test build
+          </a>
+
+          <a
+            href="/demo"
+            style={{
+              padding: "14px 22px",
+              border: "1px solid #ccc",
+              borderRadius: 8,
+              textDecoration: "none",
+              color: "#111",
+            }}
+          >
+            See example analysis →
+          </a>
+        </div>
+      </section>
 
       {/* WHO IT IS FOR */}
-      <section style={{ marginBottom: 48 }}>
-        <h2>Built for</h2>
-        <ul>
+      <section style={{ marginBottom: 64 }}>
+        <h2 style={{ fontSize: 26, marginBottom: 12 }}>Built for</h2>
+        <ul style={{ color: "#444", lineHeight: 1.8 }}>
           <li>Indie game studios</li>
           <li>Small & mid-size game teams</li>
           <li>Mobile & PC game developers</li>
         </ul>
       </section>
 
-      {/* PROBLEM */}
-      <section style={{ marginBottom: 48 }}>
-        <h2>The problem</h2>
-        <p style={{ color: "#555" }}>
+      {/* THE REAL PROBLEM */}
+      <section style={{ marginBottom: 64 }}>
+        <h2 style={{ fontSize: 26, marginBottom: 12 }}>
+          The problem with game development
+        </h2>
+        <p style={{ color: "#555", lineHeight: 1.7 }}>
           Most games rely on instinct and hope.
-          After months of work, teams realise too late that a game is not viable.
+          <br />
+          After months of work, teams realise too late that a game
+          is not viable.
         </p>
-        <p style={{ color: "#555" }}>
-          LaunchSense exists to reduce that risk — early.
+        <p style={{ color: "#555", lineHeight: 1.7 }}>
+          LaunchSense exists to reduce that risk — <strong>early</strong>,
+          when decisions are still cheap.
         </p>
-      </section>
-
-      {/* WHAT IT DOES */}
-      <section style={{ marginBottom: 48 }}>
-        <h2>What LaunchSense does</h2>
-        <ul>
-          <li>Reads early gameplay behaviour</li>
-          <li>Highlights risk patterns before scaling</li>
-          <li>Supports calm, data-driven decisions</li>
-        </ul>
       </section>
 
       {/* HOW IT WORKS */}
-      <section style={{ marginBottom: 80 }}>
-        <h2>How it works</h2>
-        <ol style={{ color: "#555" }}>
-          <li>Share early gameplay behaviour from test builds</li>
-          <li>LaunchSense analyzes patterns that indicate risk</li>
+      <section style={{ marginBottom: 64 }}>
+        <h2 style={{ fontSize: 26, marginBottom: 16 }}>
+          How LaunchSense works
+        </h2>
+
+        <ol style={{ color: "#444", lineHeight: 1.8 }}>
+          <li>Run early playtests on a test build</li>
+          <li>Send session data to LaunchSense</li>
           <li>
-            <strong>You decide</strong> what to fix, pause, or rethink — early
+            We detect risk patterns from player behaviour
+          </li>
+          <li>
+            <strong>You decide</strong> what to fix, pause, or rethink
           </li>
         </ol>
       </section>
 
-      {/* WHAT IT DOES NOT DO */}
-      <section style={{ marginBottom: 48 }}>
-        <h2>What LaunchSense does not do</h2>
-        <ul style={{ color: "#555" }}>
-          <li>It does not predict guaranteed success or failure</li>
-          <li>It does not replace creative design judgment</li>
-          <li>It does not force decisions on your team</li>
-        </ul>
-        <p style={{ marginTop: 12, color: "#666" }}>
-          LaunchSense highlights early risk — decisions always stay with your team.
-        </p>
-      </section>
-
-      {/* WHY EARLY DATA */}
-      <section style={{ marginBottom: 48 }}>
-        <h2>Why early data matters</h2>
-        <p style={{ color: "#555" }}>
-          Early player behaviour reveals issues long before revenue,
-          ratings, or reviews appear.
-        </p>
-        <p style={{ color: "#555" }}>
-          Catching risk early saves months of work — and team morale.
-        </p>
-      </section>
-
-      {/* SAMPLE ANALYSIS */}
-      <section style={{ marginBottom: 48 }}>
-        <h2>Example: early gameplay analysis</h2>
+      {/* EXAMPLE CARD */}
+      <section style={{ marginBottom: 72 }}>
+        <h2 style={{ fontSize: 26, marginBottom: 16 }}>
+          Example: early gameplay analysis
+        </h2>
 
         <div
           style={{
             border: "1px solid #ddd",
-            borderRadius: 8,
-            padding: 16,
-            maxWidth: 500,
+            borderRadius: 12,
+            padding: 20,
             background: "#fafafa",
+            maxWidth: 420,
           }}
         >
-          <p><strong>Risk level:</strong> High</p>
-          <p><strong>Pattern strength:</strong> Medium</p>
+          <p>
+            <strong>Risk level:</strong> High
+          </p>
+          <p>
+            <strong>Pattern strength:</strong> Medium
+          </p>
 
           <p style={{ marginTop: 12 }}>
             <strong>Key signals:</strong>
@@ -135,85 +143,76 @@ export default function Home() {
         </div>
       </section>
 
-      {/* HOW TEAMS USE THIS */}
-      <section style={{ marginBottom: 48 }}>
-        <h2>How teams use LaunchSense</h2>
-        <ul style={{ color: "#555" }}>
-          <li>Run early playtests</li>
-          <li>Detect risk before scaling</li>
-          <li>Decide what to fix first</li>
+      {/* WHAT IT DOES NOT DO */}
+      <section style={{ marginBottom: 64 }}>
+        <h2 style={{ fontSize: 26, marginBottom: 12 }}>
+          What LaunchSense does not do
+        </h2>
+        <ul style={{ color: "#444", lineHeight: 1.8 }}>
+          <li>It does not predict guaranteed success or failure</li>
+          <li>It does not replace creative judgement</li>
+          <li>It does not force decisions on your team</li>
         </ul>
-      </section>
 
-      {/* SAFE CTA */}
-      <section style={{ marginBottom: 48 }}>
-        <a
-          href="/demo"
-          style={{
-            padding: "10px 16px",
-            border: "1px solid #000",
-            borderRadius: 6,
-            marginRight: 12,
-            textDecoration: "none",
-            color: "#000",
-          }}
-        >
-          View a sample analysis →
-        </a>
-
-        <a
-          href="/methodology"
-          style={{ color: "#555", textDecoration: "underline" }}
-        >
-          Read the methodology
-        </a>
+        <p style={{ color: "#555", marginTop: 12 }}>
+          LaunchSense highlights early risk — decisions always stay with you.
+        </p>
       </section>
 
       {/* PRICING HINT */}
-      <section style={{ marginBottom: 48 }}>
-        <h2>Simple pricing</h2>
+      <section style={{ marginBottom: 72 }}>
+        <h2 style={{ fontSize: 26, marginBottom: 12 }}>
+          Simple pricing
+        </h2>
         <p style={{ color: "#555" }}>
           Start free. Upgrade only when you need deeper analysis.
         </p>
-        <p style={{ fontSize: 14, color: "#666" }}>
+        <p style={{ color: "#666", fontSize: 14 }}>
           No long-term contracts. No forced decisions.
         </p>
       </section>
 
       {/* FINAL CTA */}
-      <section style={{ marginBottom: 64 }}>
+      <section style={{ marginBottom: 72 }}>
         <a
           href="/signup"
           style={{
-            padding: "12px 20px",
+            display: "inline-block",
+            padding: "16px 26px",
             background: "#000",
             color: "#fff",
-            borderRadius: 6,
-            marginRight: 12,
+            borderRadius: 8,
             textDecoration: "none",
+            fontWeight: 500,
           }}
         >
           Try LaunchSense on a test build
         </a>
 
-        <a
-          href="/demo"
-          style={{ color: "#555", textDecoration: "underline" }}
-        >
-          See how decisions work
-        </a>
+        <div style={{ marginTop: 14 }}>
+          <a
+            href="/demo"
+            style={{ color: "#555", textDecoration: "underline" }}
+          >
+            See how decisions work →
+          </a>
+        </div>
       </section>
 
       {/* FOOTER */}
       <footer style={{ borderTop: "1px solid #eee", paddingTop: 24 }}>
         <p style={{ fontSize: 14, color: "#666" }}>
-          <a href="/methodology" style={{ marginRight: 16 }}>Methodology</a>
-          <a href="/sdk" style={{ marginRight: 16 }}>SDK</a>
+          <a href="/methodology" style={{ marginRight: 16 }}>
+            Methodology
+          </a>
+          <a href="/sdk" style={{ marginRight: 16 }}>
+            SDK
+          </a>
           <a href="/pricing">Pricing</a>
         </p>
 
-        <p style={{ fontSize: 14, color: "#666", marginTop: 12 }}>
-          LaunchSense supports decisions. It never replaces creative judgment.
+        <p style={{ fontSize: 13, color: "#888", marginTop: 12 }}>
+          LaunchSense supports decisions. It never replaces creative judgement.
         </p>
       </footer>
     </main>
