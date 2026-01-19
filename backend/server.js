@@ -1,4 +1,4 @@
-// LaunchSense Backend — STEP 73 to STEP 80 (Production SaaS Layer)
+// LaunchSense Backend — STEP 81 to STEP 90 (SaaS Governance Layer)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -41,85 +41,22 @@ app.use((req, res, next) => {
   next();
 });
 
-// ================= RATE LIMITS =================
-const baseLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
-const apiLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 100,
-  keyGenerator: req =>
-    `${req.headers["x-game-id"] || "anon"}:${req.headers["x-api-key"] || "none"}`
-});
-
-app.use(baseLimiter);
+// ================= BASE RATE LIMIT =================
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
 
 // ================= SUPABASE =================
 const supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
 
-// ================= HELPERS =================
-function generateApiKey() {
-  return "ls_" + crypto.randomBytes(24).toString("hex");
-}
+// ================= RESPONSE HELPERS =================
+const ok = (res, data) => res.json({ success: true, data });
+const fail = (res, code, msg) =>
+  res.status(code).json({ success: false, error: msg });
 
-function ok(res, data) {
-  return res.json({ success: true, data });
-}
+// ================= API VERSION =================
+const v1 = express.Router();
+app.use("/v1", v1);
 
-function fail(res, code, message) {
-  return res.status(code).json({ success: false, error: message });
-}
-
-// ================= HEALTH =================
-app.get("/", (req, res) => ok(res, { status: "LaunchSense backend running" }));
-
-// ================= CREATE PROJECT =================
-app.post("/api/projects", async (req, res) => {
-  try {
-    const { user_id, name } = req.body;
-    if (!user_id || !name) return fail(res, 400, "user_id and name required");
-
-    const game_id = "game_" + Date.now();
-    const api_key = generateApiKey();
-
-    const { data: project, error } = await supabase
-      .from("projects")
-      .insert({ user_id, name, game_id })
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    await supabase.from("api_keys").insert({
-      game_id,
-      api_key,
-      revoked: false
-    });
-
-    ok(res, { project, api_key });
-  } catch (e) {
-    console.error("CREATE PROJECT ERROR", e);
-    fail(res, 500, "Project creation failed");
-  }
-});
-
-// ================= REVOKE API KEY (STEP 75) =================
-app.post("/api/keys/revoke", async (req, res) => {
-  try {
-    const { game_id, api_key } = req.body;
-    if (!game_id || !api_key) return fail(res, 400, "Missing fields");
-
-    await supabase
-      .from("api_keys")
-      .update({ revoked: true })
-      .eq("game_id", game_id)
-      .eq("api_key", api_key);
-
-    ok(res, { revoked: true });
-  } catch (e) {
-    fail(res, 500, "Revoke failed");
-  }
-});
-
-// ================= API AUTH =================
+// ================= API KEY AUTH =================
 async function apiAuth(req, res, next) {
   const api_key = req.headers["x-api-key"];
   const game_id = req.headers["x-game-id"];
@@ -134,67 +71,156 @@ async function apiAuth(req, res, next) {
     .maybeSingle();
 
   if (!data) return fail(res, 401, "Invalid API key");
+  req.game_id = game_id;
   next();
 }
 
-// ================= DECISION API =================
-app.post("/api/decision", apiLimiter, apiAuth, async (req, res) => {
-  try {
-    const data = req.body;
-    const risk = calculateRiskScore(data);
-    const decision = getDecision(risk);
+// ================= PROJECT GUARD =================
+async function projectGuard(req, res, next) {
+  const { data } = await supabase
+    .from("projects")
+    .select("status, deleted")
+    .eq("game_id", req.game_id)
+    .maybeSingle();
 
-    await supabase.from("game_sessions").insert({
-      ...data,
-      risk_score: risk,
-      decision
+  if (!data || data.deleted)
+    return fail(res, 403, "Project deleted");
+
+  if (data.status !== "active")
+    return fail(res, 403, "Project inactive");
+
+  next();
+}
+
+// ================= PER PROJECT LIMIT =================
+const projectLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  keyGenerator: req => req.game_id
+});
+
+// ================= HEALTH =================
+v1.get("/", (_, res) => ok(res, { status: "LaunchSense v1 live" }));
+
+// ================= CREATE PROJECT =================
+v1.post("/projects", async (req, res) => {
+  try {
+    const { user_id, name } = req.body;
+    if (!user_id || !name) return fail(res, 400, "Invalid payload");
+
+    const game_id = "game_" + Date.now();
+    const api_key = "ls_" + crypto.randomBytes(24).toString("hex");
+
+    const { data: project, error } = await supabase
+      .from("projects")
+      .insert({
+        user_id,
+        name,
+        game_id,
+        status: "active",
+        deleted: false
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    await supabase.from("api_keys").insert({
+      game_id,
+      api_key,
+      revoked: false
     });
 
-    ok(res, { risk_score: risk, decision });
-  } catch (e) {
-    fail(res, 500, "Decision failed");
+    ok(res, { project, api_key });
+  } catch {
+    fail(res, 500, "Create project failed");
   }
 });
 
-// ================= PROJECT ANALYTICS (STEP 76) =================
-app.get("/api/projects/:game_id/summary", async (req, res) => {
+// ================= SOFT DELETE PROJECT (STEP 83) =================
+v1.post("/projects/:game_id/delete", async (req, res) => {
   try {
-    const { game_id } = req.params;
+    await supabase
+      .from("projects")
+      .update({ deleted: true })
+      .eq("game_id", req.params.game_id);
+
+    ok(res, { deleted: true });
+  } catch {
+    fail(res, 500, "Delete failed");
+  }
+});
+
+// ================= DECISION API =================
+v1.post(
+  "/decision",
+  apiAuth,
+  projectGuard,
+  projectLimiter,
+  async (req, res) => {
+    try {
+      const risk = calculateRiskScore(req.body);
+      const decision = getDecision(risk);
+
+      await supabase.from("game_sessions").insert({
+        ...req.body,
+        game_id: req.game_id,
+        risk_score: risk,
+        decision
+      });
+
+      ok(res, { risk_score: risk, decision });
+    } catch {
+      fail(res, 500, "Decision failed");
+    }
+  }
+);
+
+// ================= AUDIT LOG (STEP 85) =================
+async function audit(event, meta = {}) {
+  await supabase.from("audit_logs").insert({
+    event,
+    meta,
+    at: new Date().toISOString()
+  });
+}
+
+// ================= ANALYTICS SUMMARY =================
+v1.get("/projects/:game_id/summary", async (req, res) => {
+  try {
     const { data } = await supabase
       .from("daily_analytics")
       .select("*")
-      .eq("game_id", game_id);
+      .eq("game_id", req.params.game_id);
 
     if (!data || data.length === 0)
-      return ok(res, { game_id, total_sessions: 0 });
-
-    const total = data.reduce((s, d) => s + d.total_sessions, 0);
-    const avgRisk = Math.round(
-      data.reduce((s, d) => s + d.avg_risk, 0) / data.length
-    );
+      return ok(res, { total_sessions: 0 });
 
     ok(res, {
-      game_id,
       days: data.length,
-      total_sessions: total,
-      avg_risk: avgRisk
+      total_sessions: data.reduce((s, d) => s + d.total_sessions, 0),
+      avg_risk:
+        Math.round(
+          data.reduce((s, d) => s + d.avg_risk, 0) / data.length
+        ) || 0
     });
-  } catch (e) {
+  } catch {
     fail(res, 500, "Analytics failed");
   }
 });
 
-// ================= DAILY REBUILD (STEP 77) =================
-app.post("/api/admin/recompute-daily", async (req, res) => {
-  try {
-    await supabase.rpc("recompute_daily_analytics");
-    ok(res, { recomputed: true });
-  } catch (e) {
-    fail(res, 500, "Recompute failed");
-  }
+// ================= SAFE SHUTDOWN (STEP 90) =================
+process.on("SIGTERM", () => {
+  console.log("Graceful shutdown");
+  process.exit(0);
+});
+
+process.on("SIGINT", () => {
+  console.log("Interrupted");
+  process.exit(0);
 });
 
 // ================= START =================
 app.listen(CONFIG.PORT, () => {
-  console.log("LaunchSense running on", CONFIG.PORT);
+  console.log("LaunchSense v1 running on", CONFIG.PORT);
 });
