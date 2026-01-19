@@ -1,120 +1,101 @@
 export default function Home() {
   return (
     <div style={styles.page}>
-      {/* NAVBAR */}
+      {/* NAV */}
       <header style={styles.nav}>
         <div style={styles.navInner}>
           <div style={styles.logo}>LaunchSense</div>
-          <nav style={styles.menu}>
-            <a href="#product" style={styles.navLink}>Product</a>
-            <a href="#example" style={styles.navLink}>Example</a>
-            <a href="#pricing" style={styles.navLink}>Pricing</a>
-            <a href="/signup" style={styles.ctaNav}>Analyze a build</a>
+          <nav style={styles.navLinks}>
+            <a href="#product">Product</a>
+            <a href="#example">Example</a>
+            <a href="#pricing">Pricing</a>
+            <a href="/signup" style={styles.navCta}>Analyze a build</a>
           </nav>
         </div>
       </header>
 
       {/* HERO */}
       <section style={styles.hero}>
-        <h1 style={styles.heroTitle}>
-          Some games are already failing.
-          <br />
-          <span style={styles.heroMuted}>
-            You just don’t see it yet.
-          </span>
+        <h1 style={styles.h1}>
+          Most games don’t fail at launch.<br />
+          <span style={styles.h1Muted}>They fail silently in the first few minutes.</span>
         </h1>
 
-        <p style={styles.heroSub}>
+        <p style={styles.heroText}>
           LaunchSense inspects early gameplay behaviour from test builds
-          and surfaces risk patterns — so teams decide before time, money,
-          and morale are locked in.
+          and surfaces risk patterns — so teams decide <b>before</b> time,
+          money, and morale are locked in.
         </p>
 
-        <div style={styles.heroCta}>
-          <a href="/signup" style={styles.primaryBtn}>
-            Analyze a test build
-          </a>
-          <a href="#example" style={styles.secondaryBtn}>
-            View example output →
-          </a>
-        </div>
-      </section>
-
-      {/* WHAT IT DETECTS */}
-      <section id="product" style={styles.section}>
-        <h2 style={styles.sectionTitle}>
-          What LaunchSense actually detects
-        </h2>
-
-        <div style={styles.grid}>
-          <div style={styles.card}>
-            <h3>Early abandonment</h3>
-            <p>
-              Players leaving before the core loop establishes.
-            </p>
-          </div>
-
-          <div style={styles.card}>
-            <h3>Difficulty spikes</h3>
-            <p>
-              Friction that causes repeated deaths or restarts.
-            </p>
-          </div>
-
-          <div style={styles.card}>
-            <h3>False engagement</h3>
-            <p>
-              Playtime that looks healthy but signals confusion.
-            </p>
-          </div>
+        <div style={styles.heroActions}>
+          <a href="/signup" style={styles.primaryBtn}>Analyze a test build</a>
+          <a href="#example" style={styles.secondaryBtn}>View example output →</a>
         </div>
       </section>
 
       {/* EXAMPLE */}
       <section id="example" style={styles.sectionAlt}>
-        <h2 style={styles.sectionTitle}>
-          Example: early gameplay signal
-        </h2>
+        <h2 style={styles.h2}>Example: early gameplay signal</h2>
 
-        <div style={styles.output}>
-          <div style={styles.outputHeader}>
+        <div style={styles.card}>
+          <div style={styles.riskRow}>
             <span style={styles.riskHigh}>HIGH RISK</span>
             <span style={styles.confidence}>Confidence: Medium</span>
           </div>
 
-          <ul style={styles.outputList}>
+          <ul style={styles.list}>
             <li>Players exit within first 2–3 minutes</li>
             <li>Death rate spikes before tutorial completion</li>
             <li>No session-to-session improvement</li>
           </ul>
 
-          <p style={styles.outputNote}>
+          <p style={styles.cardNote}>
             Interpretation: core loop friction detected early.
             Iteration recommended before scaling development.
           </p>
         </div>
       </section>
 
-      {/* WHO IT IS FOR */}
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>
-          Who this is for
-        </h2>
+      {/* WHAT IT DETECTS */}
+      <section id="product" style={styles.section}>
+        <h2 style={styles.h2}>What LaunchSense actually detects</h2>
+
+        <div style={styles.grid}>
+          <div style={styles.miniCard}>
+            <h3>Early abandonment</h3>
+            <p>Players leaving before the core loop stabilises.</p>
+          </div>
+
+          <div style={styles.miniCard}>
+            <h3>Difficulty spikes</h3>
+            <p>Repeated deaths, restarts, or friction signals.</p>
+          </div>
+
+          <div style={styles.miniCard}>
+            <h3>False engagement</h3>
+            <p>Playtime that looks healthy but signals confusion.</p>
+          </div>
+        </div>
+      </section>
+
+      {/* WHO IT'S FOR */}
+      <section style={styles.sectionAlt}>
+        <h2 style={styles.h2}>Who this is for</h2>
 
         <div style={styles.split}>
           <div>
             <h4>Good fit</h4>
-            <ul>
+            <ul style={styles.list}>
               <li>Indie studios validating ideas</li>
               <li>Small teams before full production</li>
-              <li>Mobile & PC developers running playtests</li>
+              <li>Mobile & PC playtests</li>
             </ul>
           </div>
 
           <div>
             <h4>Not for</h4>
-            <ul>
-              <li>Finished, live games</li>
+            <ul style={styles.listMuted}>
+              <li>Finished live games</li>
               <li>Marketing analytics</li>
               <li>Guaranteed success predictions</li>
             </ul>
@@ -122,28 +103,25 @@ export default function Home() {
         </div>
       </section>
 
-      {/* HOW TEAMS USE IT */}
-      <section style={styles.sectionAlt}>
-        <h2 style={styles.sectionTitle}>
-          How teams use LaunchSense
-        </h2>
-
+      {/* HOW IT WORKS */}
+      <section style={styles.section}>
+        <h2 style={styles.h2}>How teams use LaunchSense</h2>
         <ol style={styles.steps}>
           <li>Run a closed playtest</li>
-          <li>Upload session data</li>
+          <li>Send session data to LaunchSense</li>
           <li>Review detected risk signals</li>
-          <li>
-            Decide to iterate, pause, or rethink —
-            <b> before commitment</b>
-          </li>
+          <li><b>Decide to iterate, pause, or rethink — before commitment</b></li>
         </ol>
       </section>
 
-      {/* CTA */}
-      <section style={styles.finalCta}>
-        <h2>
-          Don’t let intuition decide months of work.
-        </h2>
+      {/* PRICING */}
+      <section id="pricing" style={styles.sectionAlt}>
+        <h2 style={styles.h2}>Simple pricing</h2>
+        <p style={styles.text}>
+          Start free. Upgrade only when you need deeper analysis.<br />
+          No long-term contracts. No forced decisions.
+        </p>
+
         <a href="/signup" style={styles.primaryBtnLarge}>
           Try LaunchSense on a test build
         </a>
@@ -151,12 +129,12 @@ export default function Home() {
 
       {/* FOOTER */}
       <footer style={styles.footer}>
-        <div>
+        <div style={styles.footerLinks}>
           <a href="/methodology">Methodology</a>
           <a href="/sdk">SDK</a>
           <a href="/pricing">Pricing</a>
         </div>
-        <p>
+        <p style={styles.footerNote}>
           LaunchSense highlights risk. Decisions always stay with you.
         </p>
       </footer>
@@ -164,183 +142,130 @@ export default function Home() {
   );
 }
 
-/* ---------------- STYLES ---------------- */
+/* STYLES */
 
 const styles = {
   page: {
-    fontFamily: "Inter, system-ui, sans-serif",
-    background: "#F9FAFB",
-    color: "#0F172A",
+    fontFamily: "system-ui, -apple-system, sans-serif",
+    color: "#0f172a",
+    background: "#ffffff",
   },
 
   nav: {
     position: "sticky",
     top: 0,
-    background: "#F9FAFB",
-    borderBottom: "1px solid #E5E7EB",
+    background: "#ffffff",
+    borderBottom: "1px solid #e5e7eb",
     zIndex: 10,
   },
   navInner: {
     maxWidth: 1100,
     margin: "0 auto",
-    padding: "16px 24px",
+    padding: "16px 20px",
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
   },
-  logo: {
-    fontWeight: 700,
-    fontSize: 18,
-  },
-  menu: {
-    display: "flex",
-    gap: 20,
-    alignItems: "center",
-  },
-  navLink: {
-    textDecoration: "none",
-    color: "#475569",
-    fontSize: 14,
-  },
-  ctaNav: {
-    background: "#2563EB",
-    color: "#fff",
+  logo: { fontWeight: 700, fontSize: 18 },
+  navLinks: { display: "flex", gap: 20, alignItems: "center" },
+  navCta: {
     padding: "8px 14px",
+    background: "#2563eb",
+    color: "#fff",
     borderRadius: 8,
     textDecoration: "none",
-    fontSize: 14,
+    fontWeight: 600,
   },
 
   hero: {
     maxWidth: 900,
     margin: "0 auto",
-    padding: "96px 24px 72px",
+    padding: "72px 20px",
   },
-  heroTitle: {
-    fontSize: 48,
-    lineHeight: 1.1,
-    marginBottom: 20,
+  h1: { fontSize: 42, lineHeight: 1.2, marginBottom: 20 },
+  h1Muted: { color: "#64748b" },
+  heroText: { fontSize: 18, color: "#475569", maxWidth: 700 },
+  heroActions: { marginTop: 28, display: "flex", gap: 16, flexWrap: "wrap" },
+
+  primaryBtn: {
+    background: "#2563eb",
+    color: "#fff",
+    padding: "14px 22px",
+    borderRadius: 10,
+    textDecoration: "none",
+    fontWeight: 600,
   },
-  heroMuted: {
-    color: "#64748B",
-  },
-  heroSub: {
-    fontSize: 18,
-    color: "#475569",
-    maxWidth: 720,
-    marginBottom: 36,
-  },
-  heroCta: {
-    display: "flex",
-    gap: 16,
-    flexWrap: "wrap",
+  secondaryBtn: {
+    color: "#2563eb",
+    textDecoration: "none",
+    fontWeight: 600,
+    padding: "14px 10px",
   },
 
   section: {
-    maxWidth: 900,
+    maxWidth: 1000,
     margin: "0 auto",
-    padding: "72px 24px",
+    padding: "72px 20px",
   },
   sectionAlt: {
-    background: "#F1F5F9",
-    padding: "72px 24px",
+    background: "#f8fafc",
+    padding: "72px 20px",
   },
-  sectionTitle: {
-    fontSize: 28,
-    marginBottom: 24,
+
+  h2: { fontSize: 28, marginBottom: 28 },
+
+  card: {
+    maxWidth: 520,
+    background: "#fff",
+    border: "1px solid #e5e7eb",
+    borderRadius: 16,
+    padding: 24,
   },
+  riskRow: { display: "flex", justifyContent: "space-between", marginBottom: 12 },
+  riskHigh: { color: "#d97706", fontWeight: 700 },
+  confidence: { color: "#64748b" },
+
+  list: { paddingLeft: 20 },
+  listMuted: { paddingLeft: 20, color: "#64748b" },
+  cardNote: { marginTop: 12, fontSize: 14, color: "#64748b" },
 
   grid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px,1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
     gap: 20,
   },
-  card: {
+  miniCard: {
+    border: "1px solid #e5e7eb",
+    borderRadius: 14,
+    padding: 20,
     background: "#fff",
-    padding: 24,
-    borderRadius: 12,
-    border: "1px solid #E5E7EB",
-  },
-
-  output: {
-    maxWidth: 520,
-    background: "#fff",
-    border: "1px solid #E5E7EB",
-    borderRadius: 12,
-    padding: 24,
-  },
-  outputHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    marginBottom: 12,
-  },
-  riskHigh: {
-    color: "#D97706",
-    fontWeight: 700,
-  },
-  confidence: {
-    fontSize: 13,
-    color: "#64748B",
-  },
-  outputList: {
-    paddingLeft: 20,
-    color: "#475569",
-  },
-  outputNote: {
-    marginTop: 12,
-    fontSize: 14,
-    color: "#475569",
   },
 
   split: {
     display: "grid",
     gridTemplateColumns: "1fr 1fr",
-    gap: 32,
+    gap: 40,
   },
 
-  steps: {
-    maxWidth: 640,
-    lineHeight: 1.9,
-    color: "#475569",
-  },
+  steps: { paddingLeft: 20, fontSize: 16 },
 
-  finalCta: {
-    textAlign: "center",
-    padding: "96px 24px",
-  },
+  text: { color: "#475569", marginBottom: 24 },
 
-  primaryBtn: {
-    background: "#2563EB",
-    color: "#fff",
-    padding: "14px 24px",
-    borderRadius: 10,
-    textDecoration: "none",
-    fontSize: 16,
-  },
   primaryBtnLarge: {
-    background: "#2563EB",
+    display: "inline-block",
+    background: "#2563eb",
     color: "#fff",
-    padding: "16px 32px",
+    padding: "16px 28px",
     borderRadius: 12,
     textDecoration: "none",
-    fontSize: 18,
-    display: "inline-block",
-    marginTop: 20,
-  },
-  secondaryBtn: {
-    border: "1px solid #CBD5E1",
-    padding: "14px 20px",
-    borderRadius: 10,
-    textDecoration: "none",
-    color: "#334155",
-    fontSize: 16,
+    fontWeight: 700,
   },
 
   footer: {
-    borderTop: "1px solid #E5E7EB",
-    padding: "40px 24px",
+    borderTop: "1px solid #e5e7eb",
+    padding: "40px 20px",
     textAlign: "center",
-    color: "#64748B",
-    fontSize: 14,
   },
+  footerLinks: { display: "flex", gap: 16, justifyContent: "center" },
+  footerNote: { marginTop: 12, color: "#64748b", fontSize: 14 },
 };
