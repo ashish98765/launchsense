@@ -1,5 +1,5 @@
-// LaunchSense Backend — Phase 2 Batch 3 + Phase 3 Admin
-// Production Intelligence Build
+// LaunchSense Backend — PHASE 4 FINAL (Production)
+// Auto-Decision + Kill-Switch + SaaS Hardening
 
 const crypto = require("crypto");
 const express = require("express");
@@ -24,10 +24,11 @@ app.disable("x-powered-by");
 
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "1.5.0-cohorts-admin",
+  VERSION: "2.0.0-phase4-final",
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
-  ADMIN_TOKEN: process.env.ADMIN_TOKEN || null
+  ADMIN_TOKEN: process.env.ADMIN_TOKEN || null,
+  READONLY: process.env.FEATURE_READONLY === "on"
 };
 
 /* ================= MIDDLEWARE ================= */
@@ -38,10 +39,10 @@ app.use(timeout("10s"));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 600 }));
 
 app.use((req, res, next) => {
-  req.req_id = crypto.randomUUID();
-  req._start = Date.now();
+  req.id = crypto.randomUUID();
+  req.start = Date.now();
   res.on("finish", () => {
-    const ms = Date.now() - req._start;
+    const ms = Date.now() - req.start;
     if (ms > 1500) console.warn("SLOW", req.path, ms);
   });
   next();
@@ -53,6 +54,14 @@ const supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
 /* ================= HELPERS ================= */
 const ok = (res, data) => res.json({ success: true, data });
 const fail = (res, c, m) => res.status(c).json({ success: false, error: m });
+
+/* ================= READ-ONLY GUARD ================= */
+app.use((req, res, next) => {
+  if (CONFIG.READONLY && req.method !== "GET") {
+    return fail(res, 503, "System in maintenance mode");
+  }
+  next();
+});
 
 /* ================= AUTH ================= */
 async function apiAuth(req, res, next) {
@@ -81,21 +90,15 @@ function adminAuth(req, res, next) {
 }
 
 /* ================= INTELLIGENCE ================= */
-function buildSignals(d) {
-  return {
-    engagement: Math.min((d.playtime || 0) / 600, 1),
-    frustration: Math.min(((d.deaths || 0) * 2 + (d.restarts || 0)) / 10, 1),
-    early_quit: d.early_quit ? 1 : 0,
-    returning: d.is_returning ? 1 : 0
-  };
-}
+function decideRisk(d) {
+  const engagement = Math.min((d.playtime || 0) / 600, 1);
+  const frustration = Math.min(((d.deaths || 0) * 2 + (d.restarts || 0)) / 10, 1);
+  const early = d.early_quit ? 1 : 0;
 
-function decide(signals) {
   const risk =
-    (1 - signals.engagement) * 0.35 +
-    signals.frustration * 0.35 +
-    signals.early_quit * 0.2 +
-    (signals.returning ? -0.05 : 0.05);
+    (1 - engagement) * 0.4 +
+    frustration * 0.4 +
+    early * 0.2;
 
   let decision = "ITERATE";
   if (risk < 0.35) decision = "GO";
@@ -104,42 +107,37 @@ function decide(signals) {
   return {
     risk_score: Math.round(risk * 100),
     decision,
-    confidence: Math.round((1 - Math.abs(0.5 - risk)) * 100) / 100,
-    signals
+    confidence: Math.round((1 - Math.abs(0.5 - risk)) * 100) / 100
   };
+}
+
+/* ================= AUTO-POLICY ================= */
+function autoPolicy(stats) {
+  if (stats.avg_risk_7d < 35 && stats.momentum > 5) return "AUTO_GO";
+  if (stats.avg_risk_7d > 70 && stats.momentum < -5) return "AUTO_KILL";
+  return "AUTO_ITERATE";
 }
 
 /* ================= API ================= */
 const v1 = express.Router();
 app.use("/v1", v1);
 
+/* ================= HEALTH ================= */
 v1.get("/", (_, res) =>
   ok(res, { status: "live", version: CONFIG.VERSION })
 );
 
-/* ================= CORE DECISION ================= */
+/* ================= DECISION SDK ================= */
 v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
-    const signals = buildSignals(req.body);
-    const result = decide(signals);
-    const today = new Date().toISOString().slice(0, 10);
+    const result = decideRisk(req.body);
 
     await supabase.from("game_sessions").insert({
       game_id: req.game_id,
       ...req.body,
       risk_score: result.risk_score,
       decision: result.decision,
-      confidence: result.confidence,
-      cohort: req.body.is_returning ? "returning" : "new",
-      signals
-    });
-
-    await supabase.rpc("increment_daily_analytics", {
-      p_game_id: req.game_id,
-      p_date: today,
-      p_risk: result.risk_score,
-      p_decision: result.decision,
-      p_cohort: req.body.is_returning ? "returning" : "new"
+      confidence: result.confidence
     });
 
     ok(res, result);
@@ -160,79 +158,71 @@ v1.get("/analytics/:game_id", async (req, res) => {
     .order("date", { ascending: false })
     .limit(30);
 
-  if (!data || data.length === 0) {
+  if (!data || data.length === 0)
     return ok(res, { game_id, health: "ITERATE" });
-  }
 
   const last7 = data.slice(0, 7);
   const avg7 = last7.reduce((s, d) => s + d.avg_risk, 0) / last7.length;
   const avg30 = data.reduce((s, d) => s + d.avg_risk, 0) / data.length;
   const momentum = Math.round((avg30 - avg7) * -1);
 
-  ok(res, {
+  const stats = {
     game_id,
     avg_risk_7d: Math.round(avg7),
     avg_risk_30d: Math.round(avg30),
-    momentum,
-    trend: momentum > 5 ? "accelerating" : momentum < -5 ? "slowing" : "flat",
+    momentum
+  };
+
+  ok(res, {
+    ...stats,
+    policy: autoPolicy(stats),
     health: avg7 < 40 ? "GO" : avg7 > 65 ? "KILL" : "ITERATE"
   });
 });
 
-/* ================= ADMIN DASHBOARD ================= */
-v1.get("/admin/overview", adminAuth, async (_, res) => {
+/* ================= ADMIN ================= */
+v1.get("/admin/system-status", adminAuth, async (_, res) => {
+  ok(res, {
+    version: CONFIG.VERSION,
+    readonly: CONFIG.READONLY,
+    admin_enabled: !!CONFIG.ADMIN_TOKEN
+  });
+});
+
+v1.get("/admin/auto-decisions", adminAuth, async (_, res) => {
   const { data } = await supabase
     .from("daily_analytics")
-    .select("total_sessions, avg_risk");
+    .select("game_id, avg_risk")
+    .order("date", { ascending: false });
 
-  const sessions = data.reduce((s, d) => s + d.total_sessions, 0);
-  const avgRisk =
-    data.reduce((s, d) => s + d.avg_risk, 0) / Math.max(data.length, 1);
-
-  ok(res, {
-    total_sessions: sessions,
-    avg_risk: Math.round(avgRisk),
-    platform_health: avgRisk < 40 ? "GO" : avgRisk > 65 ? "KILL" : "ITERATE"
-  });
-});
-
-v1.get("/admin/cohorts", adminAuth, async (_, res) => {
-  const { data } = await supabase
-    .from("game_sessions")
-    .select("cohort, decision, risk_score");
-
-  const cohorts = {};
-  data.forEach(r => {
-    const c = r.cohort || "unknown";
-    if (!cohorts[c]) cohorts[c] = { count: 0, risk: 0, go: 0, kill: 0 };
-    cohorts[c].count++;
-    cohorts[c].risk += r.risk_score;
-    if (r.decision === "GO") cohorts[c].go++;
-    if (r.decision === "KILL") cohorts[c].kill++;
+  const map = {};
+  data.forEach(d => {
+    if (!map[d.game_id]) map[d.game_id] = [];
+    map[d.game_id].push(d.avg_risk);
   });
 
-  Object.keys(cohorts).forEach(c => {
-    cohorts[c].avg_risk = Math.round(cohorts[c].risk / cohorts[c].count);
+  const out = {};
+  Object.keys(map).forEach(id => {
+    const avg = map[id].reduce((s, v) => s + v, 0) / map[id].length;
+    out[id] =
+      avg < 35 ? "AUTO_GO" : avg > 70 ? "AUTO_KILL" : "AUTO_ITERATE";
   });
 
-  ok(res, cohorts);
+  ok(res, out);
 });
 
-v1.get("/admin/projects", adminAuth, async (_, res) => {
-  const { data } = await supabase.from("projects").select("*").limit(200);
-  ok(res, data || []);
+v1.post("/admin/kill-switch/:game_id", adminAuth, async (req, res) => {
+  await supabase
+    .from("projects")
+    .update({ killed: true })
+    .eq("id", req.params.game_id);
+
+  ok(res, { killed: true });
 });
 
-v1.get("/admin/launch-check", adminAuth, async (_, res) => {
-  ok(res, {
-    env: true,
-    auth: true,
-    analytics: true,
-    cohorts: true,
-    admin: true,
-    ready: true
-  });
-});
+/* ================= SHUTDOWN ================= */
+process.on("SIGTERM", () => process.exit(0));
+process.on("SIGINT", () => process.exit(0));
 
 /* ================= START ================= */
 app.listen(CONFIG.PORT, () => {
