@@ -1,4 +1,10 @@
-// LaunchSense Backend — Phase-4 Batch-3 (SLA + Final Hardening)
+/**
+ * LaunchSense Backend
+ * Phase-1 Final Base (9.5+ Foundation)
+ * Decision Intelligence • Temporal Context • Observability
+ */
+
+require("dotenv").config();
 
 const crypto = require("crypto");
 const express = require("express");
@@ -6,62 +12,59 @@ const cors = require("cors");
 const helmet = require("helmet");
 const timeout = require("connect-timeout");
 const rateLimit = require("express-rate-limit");
-require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
+
 const { calculateRiskScore, getDecision } = require("./decisionEngine");
-const { buildExplanation } = require("./explainEngine");
 const { analyzeTemporal } = require("./temporalEngine");
+const { buildExplanation } = require("./explainEngine");
+const { buildLedgerEntry } = require("./ledger");
 const {
   observabilityMiddleware,
   trackDecision,
   getObservabilitySnapshot
 } = require("./observability");
-const { buildLedgerEntry } = require("./ledger");
 
 const app = express();
 app.disable("x-powered-by");
 
-/* ================= ENV CHECK ================= */
-[
-  "SUPABASE_URL",
-  "SUPABASE_SERVICE_KEY"
-].forEach(k => {
+/* ===================== ENV VALIDATION ===================== */
+["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach(k => {
   if (!process.env[k]) {
     console.error("Missing ENV:", k);
     process.exit(1);
   }
 });
 
-/* ================= CONFIG ================= */
+/* ===================== CONFIG ===================== */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "2.5.0-prod",
+  VERSION: "3.0.0-phase1",
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
   ADMIN_TOKEN: process.env.ADMIN_TOKEN || null,
   READONLY: process.env.FEATURE_READONLY === "on",
-  AUTO_DECISION: process.env.FEATURE_AUTO_DECISION !== "off",
-  SLA_MAX_MS: 2500
+  AUTO_DECISION: process.env.FEATURE_AUTO_DECISION === "on",
+  SLA_MS: Number(process.env.SLA_MAX_MS || 2500)
 };
 
-/* ================= CORE MIDDLEWARE ================= */
+/* ===================== CORE MIDDLEWARE ===================== */
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: "300kb" }));
-app.use(timeout("12s"));
+app.use(timeout("10s"));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 600 }));
 app.use(observabilityMiddleware);
 
-/* ================= REQUEST CONTEXT ================= */
+/* ===================== REQUEST CONTEXT ===================== */
 app.use((req, res, next) => {
   req.id = crypto.randomUUID();
-  req._start = Date.now();
+  req.start = Date.now();
 
   res.on("finish", () => {
-    const duration = Date.now() - req._start;
-    if (duration > CONFIG.SLA_MAX_MS) {
-      console.warn("SLA breach", {
+    const duration = Date.now() - req.start;
+    if (duration > CONFIG.SLA_MS) {
+      console.warn("SLA_BREACH", {
         path: req.path,
         duration,
         request_id: req.id
@@ -72,31 +75,30 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ================= READONLY MODE ================= */
+/* ===================== READONLY MODE ===================== */
 app.use((req, res, next) => {
   if (CONFIG.READONLY && req.method !== "GET") {
     return res.status(503).json({
+      success: false,
       error: "System in maintenance mode"
     });
   }
   next();
 });
 
-/* ================= SUPABASE ================= */
+/* ===================== SUPABASE ===================== */
 const supabase = createClient(
   CONFIG.SUPABASE_URL,
   CONFIG.SUPABASE_KEY,
   { auth: { persistSession: false } }
 );
 
-/* ================= HELPERS ================= */
-const ok = (res, data) =>
-  res.json({ success: true, data });
+/* ===================== HELPERS ===================== */
+const ok = (res, data) => res.json({ success: true, data });
+const fail = (res, code, msg) =>
+  res.status(code).json({ success: false, error: msg });
 
-const fail = (res, c, m) =>
-  res.status(c).json({ success: false, error: m });
-
-/* ================= AUTH ================= */
+/* ===================== AUTH ===================== */
 async function apiAuth(req, res, next) {
   const api_key = req.headers["x-api-key"];
   const game_id = req.headers["x-game-id"];
@@ -128,16 +130,13 @@ function adminAuth(req, res, next) {
   next();
 }
 
-/* ================= ROUTER ================= */
+/* ===================== ROUTER ===================== */
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ================= HEALTH ================= */
+/* ===================== HEALTH ===================== */
 v1.get("/", (_, res) =>
-  ok(res, {
-    status: "live",
-    version: CONFIG.VERSION
-  })
+  ok(res, { status: "live", version: CONFIG.VERSION })
 );
 
 v1.get("/health", (_, res) =>
@@ -148,7 +147,7 @@ v1.get("/health", (_, res) =>
   })
 );
 
-/* ================= DECISION SDK ================= */
+/* ===================== DECISION SDK ===================== */
 v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
     const risk = calculateRiskScore(req.body);
@@ -164,10 +163,12 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
     const temporal = analyzeTemporal(history || []);
 
     if (CONFIG.AUTO_DECISION) {
-      if (temporal.shock && decision === "KILL")
+      if (
+        temporal.shock ||
+        temporal.trend === "DECLINING"
+      ) {
         decision = "ITERATE";
-      if (temporal.trend === "DECLINING" && decision === "KILL")
-        decision = "ITERATE";
+      }
     } else {
       decision = "REVIEW";
     }
@@ -179,8 +180,7 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
         1
       ),
       early_exit: !!req.body.early_quit,
-      confidence:
-        Math.round((1 - Math.abs(0.5 - risk)) * 100) / 100
+      confidence: Math.round((1 - Math.abs(0.5 - risk)) * 100)
     };
 
     const explanation = buildExplanation(
@@ -192,7 +192,7 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
     const ledger = buildLedgerEntry({
       game_id: req.game_id,
       decision,
-      source: CONFIG.AUTO_DECISION ? "AI" : "HUMAN_REQUIRED",
+      source: CONFIG.AUTO_DECISION ? "AI" : "HUMAN",
       risk_score: Math.round(risk * 100),
       confidence: explanation.confidence,
       explanation_id: explanation.explanation_id,
@@ -200,16 +200,15 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
       input: req.body
     });
 
-    // NOTE: SQL insert intentionally skipped for now
-    // await supabase.from("decision_ledger").insert(ledger);
-
     trackDecision(decision);
 
     ok(res, {
       decision,
+      risk_score: ledger.risk_score,
       confidence: ledger.confidence,
-      explanation,
-      temporal
+      trend: temporal.trend,
+      stability: temporal.stability,
+      explanation
     });
   } catch (e) {
     console.error("Decision error:", e);
@@ -217,15 +216,15 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
   }
 });
 
-/* ================= ADMIN ================= */
-v1.get("/admin/observability", adminAuth, (_, res) => {
-  ok(res, getObservabilitySnapshot());
-});
+/* ===================== ADMIN ===================== */
+v1.get("/admin/observability", adminAuth, (_, res) =>
+  ok(res, getObservabilitySnapshot())
+);
 
-/* ================= START ================= */
+/* ===================== START ===================== */
 app.listen(CONFIG.PORT, () => {
   console.log(
-    `🚀 LaunchSense ${CONFIG.VERSION} running on port`,
+    `LaunchSense ${CONFIG.VERSION} running on port`,
     CONFIG.PORT
   );
 });
