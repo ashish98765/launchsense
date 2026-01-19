@@ -1,4 +1,4 @@
-// LaunchSense Backend — Phase 2 Analytics & Trends
+// LaunchSense Backend — Phase 2 Batch-2 (Trends + Momentum)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -23,7 +23,7 @@ app.disable("x-powered-by");
 
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "1.2.0-analytics",
+  VERSION: "1.3.0-trends",
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
 };
@@ -173,7 +173,7 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
   }
 });
 
-/* ================= ANALYTICS READ ================= */
+/* ================= ANALYTICS (7/30 DAY + MOMENTUM) ================= */
 v1.get("/analytics/:game_id", async (req, res) => {
   const { game_id } = req.params;
 
@@ -182,35 +182,44 @@ v1.get("/analytics/:game_id", async (req, res) => {
     .select("*")
     .eq("game_id", game_id)
     .order("date", { ascending: false })
-    .limit(7);
+    .limit(30);
 
   if (!data || data.length === 0) {
     return ok(res, {
       game_id,
       health: "ITERATE",
       trend: "flat",
-      avg_risk: 0,
+      momentum: 0,
+      avg_risk_7d: 0,
+      avg_risk_30d: 0,
       total_sessions: 0,
     });
   }
 
-  const avgRisk =
+  const last7 = data.slice(0, 7);
+  const avg7 =
+    last7.reduce((s, d) => s + d.avg_risk, 0) / last7.length;
+
+  const avg30 =
     data.reduce((s, d) => s + d.avg_risk, 0) / data.length;
 
-  const trend =
-    data.length >= 2
-      ? data[0].avg_risk < data[data.length - 1].avg_risk
-        ? "improving"
-        : "declining"
-      : "flat";
+  const momentum = Math.round((avg30 - avg7) * -1); // positive = improving
+
+  let trend = "flat";
+  if (momentum > 5) trend = "accelerating";
+  if (momentum < -5) trend = "slowing";
+
+  const avgRisk = Math.round(avg7);
 
   ok(res, {
     game_id,
-    days: data.length,
+    days_tracked: data.length,
     total_sessions: data.reduce((s, d) => s + d.total_sessions, 0),
-    avg_risk: Math.round(avgRisk),
-    health: avgRisk < 40 ? "GO" : avgRisk > 65 ? "KILL" : "ITERATE",
+    avg_risk_7d: Math.round(avg7),
+    avg_risk_30d: Math.round(avg30),
+    momentum,
     trend,
+    health: avgRisk < 40 ? "GO" : avgRisk > 65 ? "KILL" : "ITERATE",
   });
 });
 
