@@ -1,25 +1,25 @@
-// LaunchSense Backend — FINAL WORKING VERSION
+// LaunchSense Backend — Hardened Version
 
 const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
-const { createProjectSchema, decisionSchema } = require("./validators");
 
 const { createClient } = require("@supabase/supabase-js");
 const { calculateRiskScore, getDecision } = require("./decisionEngine");
+const { createProjectSchema, decisionSchema } = require("./validators");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ================= SUPABASE =================
+// ---------------- SUPABASE ----------------
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// ================= HELPERS =================
+// ---------------- HELPERS ----------------
 function generateApiKey() {
   return "ls_" + crypto.randomBytes(24).toString("hex");
 }
@@ -39,7 +39,7 @@ async function verifyApiKey(game_id, api_key) {
   return !!data;
 }
 
-// ================= MIDDLEWARE =================
+// ---------------- MIDDLEWARE ----------------
 async function apiKeyMiddleware(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   const gameId = req.headers["x-game-id"];
@@ -51,12 +51,12 @@ async function apiKeyMiddleware(req, res, next) {
   next();
 }
 
-// ================= HEALTH =================
+// ---------------- HEALTH ----------------
 app.get("/", (req, res) => {
   res.json({ status: "LaunchSense backend running" });
 });
 
-// ================= DEMO ANALYTICS (PUBLIC) =================
+// ---------------- DEMO (PUBLIC) ----------------
 app.get("/api/demo/analytics", (req, res) => {
   res.json({
     demo: true,
@@ -66,19 +66,23 @@ app.get("/api/demo/analytics", (req, res) => {
     go_percent: 57,
     iterate_percent: 33,
     kill_percent: 10,
-    health: "GO",
+    health: "GO"
   });
 });
 
 // ================= CREATE PROJECT =================
 app.post("/api/projects", async (req, res) => {
   try {
-    const { user_id, name } = req.body;
+    const parsed = createProjectSchema.safeParse(req.body);
 
-    if (!user_id || !name) {
-      return res.status(400).json({ error: "user_id and name required" });
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "Invalid request body",
+        details: parsed.error.errors
+      });
     }
 
+    const { user_id, name } = parsed.data;
     const game_id = "game_" + Date.now();
     const api_key = generateApiKey();
 
@@ -87,32 +91,23 @@ app.post("/api/projects", async (req, res) => {
       .insert([{ user_id, name, game_id }])
       .select();
 
-    if (projectError) {
-      console.error("PROJECT INSERT ERROR:", projectError);
-      throw projectError;
-    }
+    if (projectError) throw projectError;
 
-    const { error: keyError } = await supabase.from("api_keys").insert({
-      game_id,
-      api_key,
-      revoked: false,
-    });
+    const { error: keyError } = await supabase
+      .from("api_keys")
+      .insert({ game_id, api_key, revoked: false });
 
-    if (keyError) {
-      console.error("API KEY INSERT ERROR:", keyError);
-      throw keyError;
-    }
+    if (keyError) throw keyError;
 
     res.json({
       success: true,
       project,
-      api_key,
+      api_key
     });
   } catch (e) {
-    console.error("CREATE PROJECT FAILED:", e);
     res.status(500).json({
       error: "Project creation failed",
-      details: e.message || e,
+      details: e.message
     });
   }
 });
@@ -133,9 +128,18 @@ app.get("/api/projects", async (req, res) => {
   }
 });
 
-// ================= DECISION API (PROTECTED) =================
+// ================= DECISION API =================
 app.post("/api/decision", apiKeyMiddleware, async (req, res) => {
   try {
+    const parsed = decisionSchema.safeParse(req.body);
+
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "Invalid decision payload",
+        details: parsed.error.errors
+      });
+    }
+
     const {
       game_id,
       player_id,
@@ -143,18 +147,14 @@ app.post("/api/decision", apiKeyMiddleware, async (req, res) => {
       playtime,
       deaths,
       restarts,
-      early_quit,
-    } = req.body;
-
-    if (!game_id || !player_id || !session_id) {
-      return res.status(400).json({ error: "Missing identifiers" });
-    }
+      early_quit
+    } = parsed.data;
 
     const risk_score = calculateRiskScore({
       playtime,
       deaths,
       restarts,
-      earlyQuit: early_quit,
+      earlyQuit: early_quit
     });
 
     const decision = getDecision(risk_score);
@@ -168,7 +168,7 @@ app.post("/api/decision", apiKeyMiddleware, async (req, res) => {
       restarts,
       early_quit,
       risk_score,
-      decision,
+      decision
     });
 
     res.json({ success: true, risk_score, decision });
@@ -177,67 +177,63 @@ app.post("/api/decision", apiKeyMiddleware, async (req, res) => {
   }
 });
 
-// ================= ANALYTICS (PROTECTED) =================
-app.get(
-  "/api/analytics/game/:game_id",
-  apiKeyMiddleware,
-  async (req, res) => {
-    try {
-      const { game_id } = req.params;
+// ================= ANALYTICS =================
+app.get("/api/analytics/:game_id", apiKeyMiddleware, async (req, res) => {
+  try {
+    const { game_id } = req.params;
 
-      const { data } = await supabase
-        .from("game_sessions")
-        .select("decision, risk_score")
-        .eq("game_id", game_id);
+    const { data } = await supabase
+      .from("game_sessions")
+      .select("decision, risk_score")
+      .eq("game_id", game_id);
 
-      if (!data || data.length === 0) {
-        return res.json({
-          game_id,
-          total_sessions: 0,
-          go_percent: 0,
-          iterate_percent: 0,
-          kill_percent: 0,
-          average_risk: 0,
-          health: "ITERATE",
-        });
-      }
-
-      let go = 0,
-        iterate = 0,
-        kill = 0,
-        riskSum = 0;
-
-      data.forEach((s) => {
-        riskSum += s.risk_score;
-        if (s.decision === "GO") go++;
-        else if (s.decision === "ITERATE") iterate++;
-        else kill++;
-      });
-
-      const total = data.length;
-      const avgRisk = Math.round(riskSum / total);
-
-      let health = "ITERATE";
-      if (go / total > 0.6 && avgRisk < 40) health = "GO";
-      if (kill / total > 0.3 && avgRisk > 65) health = "KILL";
-
-      res.json({
+    if (!data || data.length === 0) {
+      return res.json({
         game_id,
-        total_sessions: total,
-        go_percent: Math.round((go / total) * 100),
-        iterate_percent: Math.round((iterate / total) * 100),
-        kill_percent: Math.round((kill / total) * 100),
-        average_risk: avgRisk,
-        health,
+        total_sessions: 0,
+        go_percent: 0,
+        iterate_percent: 0,
+        kill_percent: 0,
+        average_risk: 0,
+        health: "ITERATE"
       });
-    } catch (e) {
-      res.status(500).json({ error: "Analytics failed" });
     }
+
+    let go = 0,
+      iterate = 0,
+      kill = 0,
+      riskSum = 0;
+
+    data.forEach(s => {
+      riskSum += s.risk_score;
+      if (s.decision === "GO") go++;
+      else if (s.decision === "ITERATE") iterate++;
+      else kill++;
+    });
+
+    const total = data.length;
+    const avgRisk = Math.round(riskSum / total);
+
+    let health = "ITERATE";
+    if (go / total > 0.6 && avgRisk < 40) health = "GO";
+    if (kill / total > 0.3 && avgRisk > 65) health = "KILL";
+
+    res.json({
+      game_id,
+      total_sessions: total,
+      go_percent: Math.round((go / total) * 100),
+      iterate_percent: Math.round((iterate / total) * 100),
+      kill_percent: Math.round((kill / total) * 100),
+      average_risk: avgRisk,
+      health
+    });
+  } catch (e) {
+    res.status(500).json({ error: "Analytics failed" });
   }
-);
+});
 
 // ================= START =================
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () =>
-  console.log("LaunchSense backend running on", PORT)
-);
+app.listen(PORT, () => {
+  console.log("LaunchSense backend running on", PORT);
+});
