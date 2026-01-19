@@ -1,39 +1,53 @@
-// Temporal Intelligence Engine
-// Purpose: Time-aware risk interpretation
+// Temporal Intelligence Engine — A1
+// Computes trend, volatility, shock & stability
 
-function analyzeTemporal(data = []) {
-  if (data.length < 3) {
+function analyzeTemporal(history = []) {
+  if (!Array.isArray(history) || history.length < 3) {
     return {
-      trend: "INSUFFICIENT_DATA",
+      trend: "STABLE",
       volatility: 0,
-      shock: false
+      shock: false,
+      stability: "Medium"
     };
   }
 
-  const values = data.map(d => d.avg_risk);
+  const values = history
+    .map(h => Number(h.avg_risk))
+    .filter(v => !isNaN(v));
 
-  // Trend
-  const slope =
-    (values[0] - values[values.length - 1]) / values.length;
+  const diffs = [];
+  for (let i = 1; i < values.length; i++) {
+    diffs.push(values[i - 1] - values[i]);
+  }
+
+  const avgDiff =
+    diffs.reduce((a, b) => a + b, 0) / diffs.length;
 
   let trend = "STABLE";
-  if (slope > 1) trend = "RISING";
-  if (slope < -1) trend = "DECLINING";
+  if (avgDiff > 2) trend = "IMPROVING";
+  if (avgDiff < -2) trend = "DECLINING";
 
-  // Volatility
-  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const mean =
+    values.reduce((a, b) => a + b, 0) / values.length;
+
   const variance =
-    values.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / values.length;
-  const volatility = Math.round(Math.sqrt(variance));
+    values.reduce((s, v) => s + Math.pow(v - mean, 2), 0) /
+    values.length;
 
-  // Shock detection
+  const volatility = Math.sqrt(variance);
+
   const shock =
     Math.abs(values[0] - values[1]) > 25;
 
+  let stability = "Medium";
+  if (!shock && volatility < 8) stability = "High";
+  if (shock || volatility > 18) stability = "Low";
+
   return {
     trend,
-    volatility,
-    shock
+    volatility: Math.round(volatility),
+    shock,
+    stability
   };
 }
 
