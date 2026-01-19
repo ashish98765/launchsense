@@ -1,4 +1,4 @@
-// LaunchSense Backend — STEP 38 to STEP 70 (Analytics Core)
+// LaunchSense Backend — STEP 63 → STEP 70 (Analytics Core Complete)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -10,13 +10,12 @@ require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
 const { calculateRiskScore, getDecision } = require("./decisionEngine");
-const { createProjectSchema, decisionSchema } = require("./validators");
 
 const app = express();
 app.disable("x-powered-by");
 
 // ================= CONFIG =================
-["SUPABASE_URL", "SUPABASE_SERVICE_KEY", "PORT"].forEach(k => {
+["SUPABASE_URL", "SUPABASE_SERVICE_KEY", "PORT"].forEach((k) => {
   if (!process.env[k]) {
     console.error("Missing env:", k);
     process.exit(1);
@@ -26,7 +25,7 @@ app.disable("x-powered-by");
 const CONFIG = {
   PORT: process.env.PORT,
   SUPABASE_URL: process.env.SUPABASE_URL,
-  SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY
+  SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
 };
 
 // ================= SECURITY =================
@@ -34,22 +33,27 @@ app.use(helmet());
 app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
 app.use(express.json({ limit: "50kb" }));
 app.use(timeout("10s"));
-app.use((req, res, next) => !req.timedout && next());
+app.use((req, res, next) => (!req.timedout ? next() : null));
 
 // ================= REQUEST ID =================
-app.use((req, res, next) => {
+app.use((req, _, next) => {
   req.id = crypto.randomUUID();
   next();
 });
 
-// ================= RATE LIMITS =================
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
+// ================= RATE LIMIT =================
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 200,
+  })
+);
 
-const apiKeyLimiter = rateLimit({
+const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 100,
-  keyGenerator: req =>
-    `${req.headers["x-game-id"]}:${req.headers["x-api-key"]}`
+  keyGenerator: (req) =>
+    `${req.headers["x-game-id"]}:${req.headers["x-api-key"]}`,
 });
 
 // ================= SUPABASE =================
@@ -58,18 +62,14 @@ const supabase = createClient(
   CONFIG.SUPABASE_KEY
 );
 
-// ================= HELPERS =================
-function generateApiKey() {
-  return "ls_" + crypto.randomBytes(24).toString("hex");
-}
-
-// ================= SIMPLE CACHE (STEP 70) =================
-const analyticsCache = new Map(); // key: game_id
-const CACHE_TTL = 60 * 1000; // 1 min
+// ================= ANALYTICS CACHE (STEP 64) =================
+const analyticsCache = new Map();
+const CACHE_TTL = 60 * 1000;
 
 function setCache(game_id, data) {
   analyticsCache.set(game_id, { data, ts: Date.now() });
 }
+
 function getCache(game_id) {
   const entry = analyticsCache.get(game_id);
   if (!entry) return null;
@@ -80,27 +80,29 @@ function getCache(game_id) {
   return entry.data;
 }
 
-// ================= DECISION API (STEP 65–67) =================
-app.post(
-  "/api/decision",
-  apiKeyLimiter,
-  async (req, res) => {
-    const parsed = decisionSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: "Invalid payload" });
+// ================= HEALTH =================
+app.get("/", (_, res) => {
+  res.json({ status: "LaunchSense backend running" });
+});
+
+// ================= DECISION API =================
+app.post("/api/decision", apiLimiter, async (req, res) => {
+  try {
+    const data = req.body;
+
+    if (!data.game_id || !data.player_id || !data.session_id) {
+      return res.status(400).json({ error: "Missing identifiers" });
     }
 
-    const data = parsed.data;
     const today = new Date().toISOString().slice(0, 10);
-
     const risk = calculateRiskScore(data);
     const decision = getDecision(risk);
 
-    // save raw session
+    // save session
     await supabase.from("game_sessions").insert({
       ...data,
       risk_score: risk,
-      decision
+      decision,
     });
 
     // STEP 65–67: daily aggregation
@@ -119,29 +121,34 @@ app.post(
         avg_risk: risk,
         go_count: decision === "GO" ? 1 : 0,
         iterate_count: decision === "ITERATE" ? 1 : 0,
-        kill_count: decision === "KILL" ? 1 : 0
+        kill_count: decision === "KILL" ? 1 : 0,
       });
     } else {
       const total = row.total_sessions + 1;
-      const avg =
-        Math.round((row.avg_risk * row.total_sessions + risk) / total);
+      const avg = Math.round(
+        (row.avg_risk * row.total_sessions + risk) / total
+      );
 
-      await supabase.from("daily_analytics")
+      await supabase
+        .from("daily_analytics")
         .update({
           total_sessions: total,
           avg_risk: avg,
           go_count: row.go_count + (decision === "GO" ? 1 : 0),
           iterate_count: row.iterate_count + (decision === "ITERATE" ? 1 : 0),
-          kill_count: row.kill_count + (decision === "KILL" ? 1 : 0)
+          kill_count: row.kill_count + (decision === "KILL" ? 1 : 0),
         })
         .eq("id", row.id);
     }
 
-    analyticsCache.delete(data.game_id); // invalidate cache
+    // STEP 69: cache invalidate
+    analyticsCache.delete(data.game_id);
 
     res.json({ risk_score: risk, decision });
+  } catch (e) {
+    res.status(500).json({ error: "Decision API failed" });
   }
-);
+});
 
 // ================= ANALYTICS READ (STEP 68–70) =================
 app.get("/api/analytics/:game_id", async (req, res) => {
@@ -157,26 +164,45 @@ app.get("/api/analytics/:game_id", async (req, res) => {
     .order("date", { ascending: false })
     .limit(7);
 
-  // STEP 68: zero-data safe
+  // STEP 65: zero-data safety
   if (!data || data.length === 0) {
     return res.json({
       game_id,
       total_sessions: 0,
       avg_risk: 0,
-      health: "ITERATE"
+      health: "ITERATE",
     });
   }
 
   const totalSessions = data.reduce((s, d) => s + d.total_sessions, 0);
-  const avgRisk =
-    Math.round(data.reduce((s, d) => s + d.avg_risk, 0) / data.length);
+  const avgRisk = Math.round(
+    data.reduce((s, d) => s + d.avg_risk, 0) / data.length
+  );
+
+  let go = 0,
+    iterate = 0,
+    kill = 0;
+
+  data.forEach((d) => {
+    go += d.go_count;
+    iterate += d.iterate_count;
+    kill += d.kill_count;
+  });
+
+  // STEP 68: health logic
+  let health = "ITERATE";
+  if (go / totalSessions > 0.6 && avgRisk < 40) health = "GO";
+  if (kill / totalSessions > 0.3 && avgRisk > 65) health = "KILL";
 
   const result = {
     game_id,
     days: data.length,
     total_sessions: totalSessions,
     avg_risk: avgRisk,
-    health: avgRisk < 40 ? "GO" : avgRisk > 65 ? "KILL" : "ITERATE"
+    go_percent: Math.round((go / totalSessions) * 100),
+    iterate_percent: Math.round((iterate / totalSessions) * 100),
+    kill_percent: Math.round((kill / totalSessions) * 100),
+    health,
   };
 
   setCache(game_id, result);
