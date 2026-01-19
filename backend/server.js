@@ -1,4 +1,4 @@
-// LaunchSense Backend — Phase 2 (Temporal Intelligence)
+// LaunchSense Backend — Phase 3 (Control Plane & Governance)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -16,7 +16,7 @@ const { analyzeTemporal } = require("./temporalEngine");
 const app = express();
 app.disable("x-powered-by");
 
-/* ===================== ENV ===================== */
+/* ================= ENV ================= */
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach(k => {
   if (!process.env[k]) {
     console.error("Missing ENV:", k);
@@ -24,17 +24,18 @@ app.disable("x-powered-by");
   }
 });
 
-/* ===================== CONFIG ===================== */
+/* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "2.2.0-temporal",
+  VERSION: "2.3.0-control-plane",
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
   ADMIN_TOKEN: process.env.ADMIN_TOKEN || null,
-  READONLY: process.env.FEATURE_READONLY === "on"
+  READONLY: process.env.FEATURE_READONLY === "on",
+  AUTO_DECISION: process.env.FEATURE_AUTO_DECISION !== "off"
 };
 
-/* ===================== MIDDLEWARE ===================== */
+/* ================= MIDDLEWARE ================= */
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: "300kb" }));
@@ -51,22 +52,22 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ===================== READONLY ===================== */
+/* ================= READONLY ================= */
 app.use((req, res, next) => {
   if (CONFIG.READONLY && req.method !== "GET") {
-    return res.status(503).json({ error: "Maintenance mode" });
+    return res.status(503).json({ error: "System locked (read-only)" });
   }
   next();
 });
 
-/* ===================== SUPABASE ===================== */
+/* ================= SUPABASE ================= */
 const supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
 
-/* ===================== HELPERS ===================== */
+/* ================= HELPERS ================= */
 const ok = (res, data) => res.json({ success: true, data });
 const fail = (res, c, m) => res.status(c).json({ success: false, error: m });
 
-/* ===================== AUTH ===================== */
+/* ================= AUTH ================= */
 async function apiAuth(req, res, next) {
   const api_key = req.headers["x-api-key"];
   const game_id = req.headers["x-game-id"];
@@ -85,23 +86,29 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-/* ===================== API ===================== */
+function adminAuth(req, res, next) {
+  if (!CONFIG.ADMIN_TOKEN)
+    return fail(res, 503, "Admin disabled");
+  if (req.headers["x-admin-token"] !== CONFIG.ADMIN_TOKEN)
+    return fail(res, 401, "Admin auth failed");
+  next();
+}
+
+/* ================= API ================= */
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ===================== HEALTH ===================== */
+/* ================= HEALTH ================= */
 v1.get("/", (_, res) =>
   ok(res, { status: "live", version: CONFIG.VERSION })
 );
 
-/* ===================== DECISION SDK ===================== */
+/* ================= DECISION SDK ================= */
 v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
-    // Step 1: Current risk
     const risk = calculateRiskScore(req.body);
     let decision = getDecision(risk);
 
-    // Step 2: Fetch history
     const { data: history } = await supabase
       .from("daily_analytics")
       .select("avg_risk")
@@ -109,18 +116,16 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
       .order("date", { ascending: false })
       .limit(7);
 
-    // Step 3: Temporal analysis
     const temporal = analyzeTemporal(history || []);
 
-    // Step 4: Decision override (intelligent)
-    if (temporal.shock && decision === "KILL") {
-      decision = "ITERATE";
-    }
-    if (temporal.trend === "DECLINING" && decision === "KILL") {
-      decision = "ITERATE";
+    if (CONFIG.AUTO_DECISION) {
+      if (temporal.shock && decision === "KILL") decision = "ITERATE";
+      if (temporal.trend === "DECLINING" && decision === "KILL")
+        decision = "ITERATE";
+    } else {
+      decision = "REVIEW";
     }
 
-    // Step 5: Explain
     const metrics = {
       engagement: Math.min((req.body.playtime || 0) / 600, 1),
       frustration: Math.min(((req.body.deaths || 0) * 2 + (req.body.restarts || 0)) / 10, 1),
@@ -130,12 +135,12 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
 
     const explanation = buildExplanation(req.body, metrics, decision);
 
-    // Step 6: Persist
     await supabase.from("game_sessions").insert({
       game_id: req.game_id,
       ...req.body,
       risk_score: Math.round(risk * 100),
       decision,
+      decision_source: CONFIG.AUTO_DECISION ? "AI" : "HUMAN_REQUIRED",
       confidence: explanation.confidence,
       explanation_id: explanation.explanation_id,
       temporal_trend: temporal.trend,
@@ -143,23 +148,49 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
       temporal_shock: temporal.shock
     });
 
-    ok(res, {
-      decision,
-      risk_score: Math.round(risk * 100),
-      temporal,
-      explanation
-    });
+    ok(res, { decision, temporal, explanation });
   } catch (e) {
     console.error(e);
     fail(res, 500, "Decision failed");
   }
 });
 
-/* ===================== SHUTDOWN ===================== */
+/* ================= ADMIN CONTROL PLANE ================= */
+
+v1.get("/admin/system-status", adminAuth, async (_, res) => {
+  ok(res, {
+    version: CONFIG.VERSION,
+    readonly: CONFIG.READONLY,
+    auto_decision: CONFIG.AUTO_DECISION,
+    admin_enabled: true
+  });
+});
+
+v1.post("/admin/override/:game_id", adminAuth, async (req, res) => {
+  const { game_id } = req.params;
+  const { decision, reason } = req.body;
+
+  await supabase.from("projects").update({
+    forced_decision: decision,
+    override_reason: reason || "manual override"
+  }).eq("id", game_id);
+
+  ok(res, { overridden: true, decision });
+});
+
+v1.post("/admin/kill-switch/:game_id", adminAuth, async (req, res) => {
+  await supabase.from("projects")
+    .update({ killed: true })
+    .eq("id", req.params.game_id);
+
+  ok(res, { killed: true });
+});
+
+/* ================= SHUTDOWN ================= */
 process.on("SIGTERM", () => process.exit(0));
 process.on("SIGINT", () => process.exit(0));
 
-/* ===================== START ===================== */
+/* ================= START ================= */
 app.listen(CONFIG.PORT, () => {
   console.log(`LaunchSense ${CONFIG.VERSION} running on`, CONFIG.PORT);
 });
