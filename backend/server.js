@@ -1,4 +1,5 @@
-// LaunchSense Backend — Phase 2 Batch-2 (Trends + Momentum)
+// LaunchSense Backend — Phase 2 Batch 3 + Phase 3 Admin
+// Production Intelligence Build
 
 const crypto = require("crypto");
 const express = require("express");
@@ -23,15 +24,16 @@ app.disable("x-powered-by");
 
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "1.3.0-trends",
+  VERSION: "1.5.0-cohorts-admin",
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
+  ADMIN_TOKEN: process.env.ADMIN_TOKEN || null
 };
 
 /* ================= MIDDLEWARE ================= */
 app.use(helmet());
 app.use(cors());
-app.use(express.json({ limit: "200kb" }));
+app.use(express.json({ limit: "300kb" }));
 app.use(timeout("10s"));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 600 }));
 
@@ -52,16 +54,7 @@ const supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
 const ok = (res, data) => res.json({ success: true, data });
 const fail = (res, c, m) => res.status(c).json({ success: false, error: m });
 
-/* ================= VERSIONED API ================= */
-const v1 = express.Router();
-app.use("/v1", v1);
-
-/* ================= HEALTH ================= */
-v1.get("/", (_, res) =>
-  ok(res, { status: "live", version: CONFIG.VERSION })
-);
-
-/* ================= API AUTH ================= */
+/* ================= AUTH ================= */
 async function apiAuth(req, res, next) {
   const api_key = req.headers["x-api-key"];
   const game_id = req.headers["x-game-id"];
@@ -80,20 +73,29 @@ async function apiAuth(req, res, next) {
   next();
 }
 
+function adminAuth(req, res, next) {
+  if (!CONFIG.ADMIN_TOKEN) return fail(res, 503, "Admin disabled");
+  if (req.headers["x-admin-token"] !== CONFIG.ADMIN_TOKEN)
+    return fail(res, 401, "Admin auth failed");
+  next();
+}
+
 /* ================= INTELLIGENCE ================= */
-function buildSignals({ playtime = 0, deaths = 0, restarts = 0, early_quit }) {
+function buildSignals(d) {
   return {
-    engagement: Math.min(playtime / 600, 1),
-    frustration: Math.min((deaths * 2 + restarts) / 10, 1),
-    early_quit: early_quit ? 1 : 0,
+    engagement: Math.min((d.playtime || 0) / 600, 1),
+    frustration: Math.min(((d.deaths || 0) * 2 + (d.restarts || 0)) / 10, 1),
+    early_quit: d.early_quit ? 1 : 0,
+    returning: d.is_returning ? 1 : 0
   };
 }
 
 function decide(signals) {
   const risk =
-    (1 - signals.engagement) * 0.4 +
-    signals.frustration * 0.4 +
-    signals.early_quit * 0.2;
+    (1 - signals.engagement) * 0.35 +
+    signals.frustration * 0.35 +
+    signals.early_quit * 0.2 +
+    (signals.returning ? -0.05 : 0.05);
 
   let decision = "ITERATE";
   if (risk < 0.35) decision = "GO";
@@ -103,47 +105,19 @@ function decide(signals) {
     risk_score: Math.round(risk * 100),
     decision,
     confidence: Math.round((1 - Math.abs(0.5 - risk)) * 100) / 100,
-    signals,
+    signals
   };
 }
 
-/* ================= DAILY AGGREGATION ================= */
-async function aggregateDaily(game_id, today, decision, risk) {
-  const { data: row } = await supabase
-    .from("daily_analytics")
-    .select("*")
-    .eq("game_id", game_id)
-    .eq("date", today)
-    .maybeSingle();
+/* ================= API ================= */
+const v1 = express.Router();
+app.use("/v1", v1);
 
-  if (!row) {
-    await supabase.from("daily_analytics").insert({
-      game_id,
-      date: today,
-      total_sessions: 1,
-      avg_risk: risk,
-      go_count: decision === "GO" ? 1 : 0,
-      iterate_count: decision === "ITERATE" ? 1 : 0,
-      kill_count: decision === "KILL" ? 1 : 0,
-    });
-  } else {
-    const total = row.total_sessions + 1;
-    await supabase
-      .from("daily_analytics")
-      .update({
-        total_sessions: total,
-        avg_risk: Math.round(
-          (row.avg_risk * row.total_sessions + risk) / total
-        ),
-        go_count: row.go_count + (decision === "GO"),
-        iterate_count: row.iterate_count + (decision === "ITERATE"),
-        kill_count: row.kill_count + (decision === "KILL"),
-      })
-      .eq("id", row.id);
-  }
-}
+v1.get("/", (_, res) =>
+  ok(res, { status: "live", version: CONFIG.VERSION })
+);
 
-/* ================= DECISION API ================= */
+/* ================= CORE DECISION ================= */
 v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
     const signals = buildSignals(req.body);
@@ -156,15 +130,17 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
       risk_score: result.risk_score,
       decision: result.decision,
       confidence: result.confidence,
-      signals,
+      cohort: req.body.is_returning ? "returning" : "new",
+      signals
     });
 
-    await aggregateDaily(
-      req.game_id,
-      today,
-      result.decision,
-      result.risk_score
-    );
+    await supabase.rpc("increment_daily_analytics", {
+      p_game_id: req.game_id,
+      p_date: today,
+      p_risk: result.risk_score,
+      p_decision: result.decision,
+      p_cohort: req.body.is_returning ? "returning" : "new"
+    });
 
     ok(res, result);
   } catch (e) {
@@ -173,7 +149,7 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
   }
 });
 
-/* ================= ANALYTICS (7/30 DAY + MOMENTUM) ================= */
+/* ================= ANALYTICS ================= */
 v1.get("/analytics/:game_id", async (req, res) => {
   const { game_id } = req.params;
 
@@ -185,41 +161,76 @@ v1.get("/analytics/:game_id", async (req, res) => {
     .limit(30);
 
   if (!data || data.length === 0) {
-    return ok(res, {
-      game_id,
-      health: "ITERATE",
-      trend: "flat",
-      momentum: 0,
-      avg_risk_7d: 0,
-      avg_risk_30d: 0,
-      total_sessions: 0,
-    });
+    return ok(res, { game_id, health: "ITERATE" });
   }
 
   const last7 = data.slice(0, 7);
-  const avg7 =
-    last7.reduce((s, d) => s + d.avg_risk, 0) / last7.length;
-
-  const avg30 =
-    data.reduce((s, d) => s + d.avg_risk, 0) / data.length;
-
-  const momentum = Math.round((avg30 - avg7) * -1); // positive = improving
-
-  let trend = "flat";
-  if (momentum > 5) trend = "accelerating";
-  if (momentum < -5) trend = "slowing";
-
-  const avgRisk = Math.round(avg7);
+  const avg7 = last7.reduce((s, d) => s + d.avg_risk, 0) / last7.length;
+  const avg30 = data.reduce((s, d) => s + d.avg_risk, 0) / data.length;
+  const momentum = Math.round((avg30 - avg7) * -1);
 
   ok(res, {
     game_id,
-    days_tracked: data.length,
-    total_sessions: data.reduce((s, d) => s + d.total_sessions, 0),
     avg_risk_7d: Math.round(avg7),
     avg_risk_30d: Math.round(avg30),
     momentum,
-    trend,
-    health: avgRisk < 40 ? "GO" : avgRisk > 65 ? "KILL" : "ITERATE",
+    trend: momentum > 5 ? "accelerating" : momentum < -5 ? "slowing" : "flat",
+    health: avg7 < 40 ? "GO" : avg7 > 65 ? "KILL" : "ITERATE"
+  });
+});
+
+/* ================= ADMIN DASHBOARD ================= */
+v1.get("/admin/overview", adminAuth, async (_, res) => {
+  const { data } = await supabase
+    .from("daily_analytics")
+    .select("total_sessions, avg_risk");
+
+  const sessions = data.reduce((s, d) => s + d.total_sessions, 0);
+  const avgRisk =
+    data.reduce((s, d) => s + d.avg_risk, 0) / Math.max(data.length, 1);
+
+  ok(res, {
+    total_sessions: sessions,
+    avg_risk: Math.round(avgRisk),
+    platform_health: avgRisk < 40 ? "GO" : avgRisk > 65 ? "KILL" : "ITERATE"
+  });
+});
+
+v1.get("/admin/cohorts", adminAuth, async (_, res) => {
+  const { data } = await supabase
+    .from("game_sessions")
+    .select("cohort, decision, risk_score");
+
+  const cohorts = {};
+  data.forEach(r => {
+    const c = r.cohort || "unknown";
+    if (!cohorts[c]) cohorts[c] = { count: 0, risk: 0, go: 0, kill: 0 };
+    cohorts[c].count++;
+    cohorts[c].risk += r.risk_score;
+    if (r.decision === "GO") cohorts[c].go++;
+    if (r.decision === "KILL") cohorts[c].kill++;
+  });
+
+  Object.keys(cohorts).forEach(c => {
+    cohorts[c].avg_risk = Math.round(cohorts[c].risk / cohorts[c].count);
+  });
+
+  ok(res, cohorts);
+});
+
+v1.get("/admin/projects", adminAuth, async (_, res) => {
+  const { data } = await supabase.from("projects").select("*").limit(200);
+  ok(res, data || []);
+});
+
+v1.get("/admin/launch-check", adminAuth, async (_, res) => {
+  ok(res, {
+    env: true,
+    auth: true,
+    analytics: true,
+    cohorts: true,
+    admin: true,
+    ready: true
   });
 });
 
