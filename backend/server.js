@@ -1,4 +1,4 @@
-// LaunchSense Backend — STEP 91 to STEP 100 (Billing + Plans + Usage)
+// LaunchSense Backend — STEP 101 to STEP 110 (Orgs, Teams, RBAC, Dashboard)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -15,7 +15,7 @@ const app = express();
 app.disable("x-powered-by");
 
 // ================= CONFIG =================
-["SUPABASE_URL", "SUPABASE_SERVICE_KEY", "PORT", "BILLING_WEBHOOK_SECRET"].forEach(k => {
+["SUPABASE_URL", "SUPABASE_SERVICE_KEY", "PORT"].forEach(k => {
   if (!process.env[k]) {
     console.error("Missing ENV:", k);
     process.exit(1);
@@ -25,16 +25,16 @@ app.disable("x-powered-by");
 const CONFIG = {
   PORT: process.env.PORT,
   SUPABASE_URL: process.env.SUPABASE_URL,
-  SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
-  WEBHOOK_SECRET: process.env.BILLING_WEBHOOK_SECRET
+  SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY
 };
 
-// ================= SECURITY =================
+// ================= MIDDLEWARE =================
 app.use(helmet());
 app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
 app.use(express.json({ limit: "100kb" }));
 app.use(timeout("10s"));
 app.use((req, res, next) => (req.timedout ? null : next()));
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
 
 // ================= REQUEST ID =================
 app.use((req, res, next) => {
@@ -42,16 +42,24 @@ app.use((req, res, next) => {
   next();
 });
 
-// ================= RATE LIMIT =================
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
-
 // ================= SUPABASE =================
 const supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
 
-// ================= RESPONSE HELPERS =================
+// ================= HELPERS =================
 const ok = (res, data) => res.json({ success: true, data });
 const fail = (res, code, msg) =>
   res.status(code).json({ success: false, error: msg });
+
+async function audit(user_id, event, meta = {}) {
+  try {
+    await supabase.from("audit_logs").insert({
+      user_id,
+      event,
+      meta,
+      at: new Date().toISOString()
+    });
+  } catch (_) {}
+}
 
 // ================= API VERSION =================
 const v1 = express.Router();
@@ -76,145 +84,158 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-// ================= PROJECT GUARD =================
-async function projectGuard(req, res, next) {
+// ================= ORG + RBAC =================
+async function orgGuard(req, res, next) {
+  const user_id = req.headers["x-user-id"];
+  const org_id = req.headers["x-org-id"];
+  if (!user_id || !org_id) return fail(res, 401, "Missing org context");
+
   const { data } = await supabase
-    .from("projects")
-    .select("status, deleted, plan")
-    .eq("game_id", req.game_id)
+    .from("org_members")
+    .select("role")
+    .eq("org_id", org_id)
+    .eq("user_id", user_id)
     .maybeSingle();
 
-  if (!data || data.deleted) return fail(res, 403, "Project deleted");
-  if (data.status !== "active") return fail(res, 403, "Project inactive");
+  if (!data) return fail(res, 403, "Not org member");
 
-  req.plan = data.plan || "free";
+  req.user_id = user_id;
+  req.org_id = org_id;
+  req.role = data.role;
   next();
 }
 
-// ================= PLAN LIMITS (STEP 91–94) =================
-const PLAN_LIMITS = {
-  free: { monthly_sessions: 10000, hard_stop: true },
-  pro: { monthly_sessions: 200000, hard_stop: false }
-};
-
-async function usageGuard(req, res, next) {
-  const month = new Date().toISOString().slice(0, 7);
-  const { data } = await supabase
-    .from("usage_monthly")
-    .select("sessions")
-    .eq("game_id", req.game_id)
-    .eq("month", month)
-    .maybeSingle();
-
-  const used = data?.sessions || 0;
-  const limit = PLAN_LIMITS[req.plan].monthly_sessions;
-
-  if (used >= limit) {
-    return fail(res, 402, "Monthly quota exceeded");
-  }
-  next();
+function requireRole(roles = []) {
+  return (req, res, next) =>
+    roles.includes(req.role)
+      ? next()
+      : fail(res, 403, "Insufficient role");
 }
 
 // ================= HEALTH =================
 v1.get("/", (_, res) => ok(res, { status: "LaunchSense v1 live" }));
 
-// ================= DECISION API (METERED) =================
+// ================= ORG CREATE (STEP 101) =================
+v1.post("/orgs", async (req, res) => {
+  try {
+    const { user_id, name } = req.body;
+    if (!user_id || !name) return fail(res, 400, "Invalid payload");
+
+    const org_id = "org_" + Date.now();
+    await supabase.from("orgs").insert({ org_id, name });
+    await supabase.from("org_members").insert({
+      org_id,
+      user_id,
+      role: "owner"
+    });
+
+    await audit(user_id, "org.created", { org_id });
+    ok(res, { org_id, name });
+  } catch {
+    fail(res, 500, "Org create failed");
+  }
+});
+
+// ================= PROJECT LIST (STEP 106,109) =================
+v1.get("/orgs/:org_id/projects", orgGuard, async (req, res) => {
+  try {
+    const page = Number(req.query.page || 1);
+    const size = Number(req.query.size || 20);
+    const from = (page - 1) * size;
+    const to = from + size - 1;
+
+    const { data } = await supabase
+      .from("projects")
+      .select("*")
+      .eq("org_id", req.org_id)
+      .range(from, to);
+
+    ok(res, { page, size, items: data || [] });
+  } catch {
+    fail(res, 500, "List failed");
+  }
+});
+
+// ================= ADD MEMBER (STEP 108) =================
 v1.post(
-  "/decision",
-  apiAuth,
-  projectGuard,
-  usageGuard,
+  "/orgs/:org_id/members",
+  orgGuard,
+  requireRole(["owner", "admin"]),
   async (req, res) => {
     try {
-      const risk = calculateRiskScore(req.body);
-      const decision = getDecision(risk);
+      const { user_id, role } = req.body;
+      if (!user_id || !role) return fail(res, 400, "Invalid payload");
 
-      await supabase.from("game_sessions").insert({
-        ...req.body,
-        game_id: req.game_id,
-        risk_score: risk,
-        decision
+      await supabase.from("org_members").insert({
+        org_id: req.org_id,
+        user_id,
+        role
       });
 
-      // STEP 92: usage metering
-      const month = new Date().toISOString().slice(0, 7);
-      const { data } = await supabase
-        .from("usage_monthly")
-        .select("sessions")
-        .eq("game_id", req.game_id)
-        .eq("month", month)
-        .maybeSingle();
-
-      if (!data) {
-        await supabase.from("usage_monthly").insert({
-          game_id: req.game_id,
-          month,
-          sessions: 1
-        });
-      } else {
-        await supabase
-          .from("usage_monthly")
-          .update({ sessions: data.sessions + 1 })
-          .eq("game_id", req.game_id)
-          .eq("month", month);
-      }
-
-      ok(res, { risk_score: risk, decision });
+      await audit(req.user_id, "org.member.added", { user_id, role });
+      ok(res, { added: true });
     } catch {
-      fail(res, 500, "Decision failed");
+      fail(res, 500, "Add member failed");
     }
   }
 );
 
-// ================= USAGE SNAPSHOT (STEP 98) =================
-v1.get("/usage/:game_id", async (req, res) => {
-  try {
-    const { game_id } = req.params;
-    const { data } = await supabase
-      .from("usage_monthly")
-      .select("*")
-      .eq("game_id", game_id)
-      .order("month", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    ok(res, {
-      game_id,
-      current_month: data?.month || null,
-      sessions_used: data?.sessions || 0
-    });
-  } catch {
-    fail(res, 500, "Usage fetch failed");
-  }
-});
-
-// ================= BILLING WEBHOOK (STEP 95–97) =================
-v1.post("/billing/webhook", express.raw({ type: "*/*" }), async (req, res) => {
-  try {
-    const sig = req.headers["x-signature"];
-    const body = req.body.toString();
-
-    const expected = crypto
-      .createHmac("sha256", CONFIG.WEBHOOK_SECRET)
-      .update(body)
-      .digest("hex");
-
-    if (sig !== expected) return fail(res, 401, "Invalid signature");
-
-    const event = JSON.parse(body);
-
-    if (event.type === "plan.updated") {
-      await supabase
-        .from("projects")
-        .update({ plan: event.plan })
-        .eq("game_id", event.game_id);
+// ================= PROJECT MEMBERS (STEP 103–104) =================
+v1.post(
+  "/projects/:game_id/members",
+  orgGuard,
+  requireRole(["owner", "admin"]),
+  async (req, res) => {
+    try {
+      const { user_id, role } = req.body;
+      await supabase.from("project_members").insert({
+        game_id: req.params.game_id,
+        user_id,
+        role
+      });
+      await audit(req.user_id, "project.member.added", {
+        game_id: req.params.game_id,
+        user_id,
+        role
+      });
+      ok(res, { added: true });
+    } catch {
+      fail(res, 500, "Project member add failed");
     }
-
-    ok(res, { received: true });
-  } catch {
-    fail(res, 400, "Webhook failed");
   }
-});
+);
+
+// ================= DASHBOARD KPIs (STEP 107) =================
+v1.get(
+  "/dashboard/kpis/:game_id",
+  apiAuth,
+  async (req, res) => {
+    try {
+      const { data } = await supabase
+        .from("daily_analytics")
+        .select("*")
+        .eq("game_id", req.params.game_id)
+        .order("date", { ascending: false })
+        .limit(7);
+
+      if (!data || data.length === 0)
+        return ok(res, { sessions: 0, avg_risk: 0, health: "ITERATE" });
+
+      const total = data.reduce((s, d) => s + d.total_sessions, 0);
+      const avgRisk = Math.round(
+        data.reduce((s, d) => s + d.avg_risk, 0) / data.length
+      );
+
+      ok(res, {
+        days: data.length,
+        total_sessions: total,
+        avg_risk: avgRisk
+      });
+    } catch {
+      fail(res, 500, "KPI fetch failed");
+    }
+  }
+);
 
 // ================= SAFE SHUTDOWN =================
 process.on("SIGTERM", () => process.exit(0));
