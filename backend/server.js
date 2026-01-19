@@ -1,4 +1,4 @@
-// LaunchSense Backend — Phase 3 (Control Plane & Governance)
+// LaunchSense Backend — Phase-4 Batch-2 (Ledger + Audit)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -12,6 +12,12 @@ const { createClient } = require("@supabase/supabase-js");
 const { calculateRiskScore, getDecision } = require("./decisionEngine");
 const { buildExplanation } = require("./explainEngine");
 const { analyzeTemporal } = require("./temporalEngine");
+const {
+  observabilityMiddleware,
+  trackDecision,
+  getObservabilitySnapshot
+} = require("./observability");
+const { buildLedgerEntry } = require("./ledger");
 
 const app = express();
 app.disable("x-powered-by");
@@ -27,7 +33,7 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "2.3.0-control-plane",
+  VERSION: "2.4.0-ledger",
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
   ADMIN_TOKEN: process.env.ADMIN_TOKEN || null,
@@ -41,21 +47,17 @@ app.use(cors());
 app.use(express.json({ limit: "300kb" }));
 app.use(timeout("10s"));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 600 }));
+app.use(observabilityMiddleware);
 
 app.use((req, res, next) => {
   req.id = crypto.randomUUID();
-  req.start = Date.now();
-  res.on("finish", () => {
-    const ms = Date.now() - req.start;
-    if (ms > 1500) console.warn("SLOW", req.path, ms);
-  });
   next();
 });
 
 /* ================= READONLY ================= */
 app.use((req, res, next) => {
   if (CONFIG.READONLY && req.method !== "GET") {
-    return res.status(503).json({ error: "System locked (read-only)" });
+    return res.status(503).json({ error: "System in maintenance mode" });
   }
   next();
 });
@@ -87,8 +89,7 @@ async function apiAuth(req, res, next) {
 }
 
 function adminAuth(req, res, next) {
-  if (!CONFIG.ADMIN_TOKEN)
-    return fail(res, 503, "Admin disabled");
+  if (!CONFIG.ADMIN_TOKEN) return fail(res, 503, "Admin disabled");
   if (req.headers["x-admin-token"] !== CONFIG.ADMIN_TOKEN)
     return fail(res, 401, "Admin auth failed");
   next();
@@ -135,60 +136,53 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
 
     const explanation = buildExplanation(req.body, metrics, decision);
 
+    // === Ledger entry (IMMUTABLE) ===
+    const ledger = buildLedgerEntry({
+      game_id: req.game_id,
+      decision,
+      source: CONFIG.AUTO_DECISION ? "AI" : "HUMAN_REQUIRED",
+      risk_score: Math.round(risk * 100),
+      confidence: explanation.confidence,
+      explanation_id: explanation.explanation_id,
+      temporal,
+      input: req.body
+    });
+
+    await supabase.from("decision_ledger").insert(ledger);
+
     await supabase.from("game_sessions").insert({
       game_id: req.game_id,
       ...req.body,
-      risk_score: Math.round(risk * 100),
+      risk_score: ledger.risk_score,
       decision,
-      decision_source: CONFIG.AUTO_DECISION ? "AI" : "HUMAN_REQUIRED",
-      confidence: explanation.confidence,
-      explanation_id: explanation.explanation_id,
-      temporal_trend: temporal.trend,
-      temporal_volatility: temporal.volatility,
-      temporal_shock: temporal.shock
+      confidence: ledger.confidence,
+      explanation_id: ledger.explanation_id
     });
 
-    ok(res, { decision, temporal, explanation });
+    trackDecision(decision);
+
+    ok(res, { decision, explanation, temporal });
   } catch (e) {
     console.error(e);
     fail(res, 500, "Decision failed");
   }
 });
 
-/* ================= ADMIN CONTROL PLANE ================= */
-
-v1.get("/admin/system-status", adminAuth, async (_, res) => {
-  ok(res, {
-    version: CONFIG.VERSION,
-    readonly: CONFIG.READONLY,
-    auto_decision: CONFIG.AUTO_DECISION,
-    admin_enabled: true
-  });
+/* ================= ADMIN ================= */
+v1.get("/admin/observability", adminAuth, (_, res) => {
+  ok(res, getObservabilitySnapshot());
 });
 
-v1.post("/admin/override/:game_id", adminAuth, async (req, res) => {
-  const { game_id } = req.params;
-  const { decision, reason } = req.body;
+v1.get("/admin/ledger/:game_id", adminAuth, async (req, res) => {
+  const { data } = await supabase
+    .from("decision_ledger")
+    .select("*")
+    .eq("game_id", req.params.game_id)
+    .order("created_at", { ascending: false })
+    .limit(100);
 
-  await supabase.from("projects").update({
-    forced_decision: decision,
-    override_reason: reason || "manual override"
-  }).eq("id", game_id);
-
-  ok(res, { overridden: true, decision });
+  ok(res, data || []);
 });
-
-v1.post("/admin/kill-switch/:game_id", adminAuth, async (req, res) => {
-  await supabase.from("projects")
-    .update({ killed: true })
-    .eq("id", req.params.game_id);
-
-  ok(res, { killed: true });
-});
-
-/* ================= SHUTDOWN ================= */
-process.on("SIGTERM", () => process.exit(0));
-process.on("SIGINT", () => process.exit(0));
 
 /* ================= START ================= */
 app.listen(CONFIG.PORT, () => {
