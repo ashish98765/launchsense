@@ -1,47 +1,60 @@
-// Explainable Decision Engine
-// Batch 1 – Intelligence Upgrade
+// Explainability Engine v2
+// Purpose: Structured, persistent, auditable decision reasoning
 
-function explainDecision(input, riskScore) {
+const crypto = require("crypto");
+
+function buildExplanation(input, metrics, decision) {
   const reasons = [];
 
-  if (input.deaths > 3) {
+  if (metrics.engagement < 0.3) {
     reasons.push({
-      factor: "High deaths",
-      impact: Math.min(0.4, input.deaths / 10)
+      factor: "engagement",
+      impact: "negative",
+      weight: 0.4,
+      note: "Low player engagement"
     });
   }
 
-  if (input.session_length < 120) {
+  if (metrics.frustration > 0.6) {
     reasons.push({
-      factor: "Low session time",
-      impact: Math.min(0.3, (120 - input.session_length) / 120)
+      factor: "frustration",
+      impact: "negative",
+      weight: 0.4,
+      note: "High frustration signals"
     });
   }
 
-  if (input.retries > 2) {
+  if (metrics.early_exit) {
     reasons.push({
-      factor: "Multiple retries",
-      impact: Math.min(0.2, input.retries / 5)
+      factor: "early_exit",
+      impact: "negative",
+      weight: 0.2,
+      note: "Early session termination"
     });
   }
 
-  if (reasons.length === 0) {
+  if (metrics.engagement > 0.7) {
     reasons.push({
-      factor: "Healthy engagement",
-      impact: 0.1
+      factor: "engagement",
+      impact: "positive",
+      weight: 0.4,
+      note: "Strong sustained engagement"
     });
   }
-
-  // normalize confidence
-  const totalImpact = reasons.reduce((s, r) => s + r.impact, 0);
-  const confidence = Math.min(1, 0.4 + totalImpact);
 
   return {
-    confidence: Number(confidence.toFixed(2)),
-    reasons: reasons
-      .sort((a, b) => b.impact - a.impact)
-      .slice(0, 3)
+    explanation_id: crypto.randomUUID(),
+    decision,
+    reasons,
+    confidence: metrics.confidence,
+    created_at: new Date().toISOString(),
+    input_snapshot: {
+      playtime: input.playtime || 0,
+      deaths: input.deaths || 0,
+      restarts: input.restarts || 0,
+      early_quit: input.early_quit || false
+    }
   };
 }
 
-module.exports = { explainDecision };
+module.exports = { buildExplanation };
