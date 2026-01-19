@@ -1,4 +1,4 @@
-// LaunchSense Backend — STEP 38 to STEP 48 (HARDENED CORE)
+// LaunchSense Backend — STEP 38 to STEP 56 (HARDENED + CORE LOGIC)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -15,59 +15,68 @@ const { createProjectSchema, decisionSchema } = require("./validators");
 const app = express();
 app.disable("x-powered-by");
 
-// ---------- BASIC SECURITY ----------
+// ================= STEP 49–50: ENV + CONFIG =================
+const REQUIRED_ENVS = [
+  "SUPABASE_URL",
+  "SUPABASE_SERVICE_KEY",
+  "PORT"
+];
+
+REQUIRED_ENVS.forEach(k => {
+  if (!process.env[k]) {
+    console.error(`❌ Missing env: ${k}`);
+    process.exit(1);
+  }
+});
+
+const CONFIG = {
+  PORT: process.env.PORT,
+  SUPABASE_URL: process.env.SUPABASE_URL,
+  SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY
+};
+
+// ================= BASIC SECURITY =================
 app.use(helmet());
-
-// ---------- STRICT CORS ----------
-app.use(
-  cors({
-    origin: "*", // later tighten (STEP 53+)
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type", "x-api-key", "x-game-id"]
-  })
-);
-
-// ---------- BODY LIMIT ----------
+app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
 app.use(express.json({ limit: "50kb" }));
 
-// ---------- REQUEST TIMEOUT ----------
+// ================= STEP 40: TIMEOUT =================
 app.use(timeout("10s"));
 app.use((req, res, next) => {
   if (!req.timedout) next();
 });
 
-// ---------- REQUEST ID ----------
+// ================= REQUEST ID =================
 app.use((req, res, next) => {
   req.id = crypto.randomUUID();
   res.setHeader("X-Request-ID", req.id);
   next();
 });
 
-// ---------- STEP 38: IP RATE LIMIT ----------
-app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
-    standardHeaders: true,
-    legacyHeaders: false
-  })
-);
+// ================= STEP 38: IP RATE LIMIT =================
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100
+}));
 
-// ---------- STEP 39: API KEY RATE LIMIT ----------
+// ================= STEP 39: API KEY RATE LIMIT =================
 const apiKeyLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 100,
   keyGenerator: req =>
-    `${req.headers["x-game-id"] || "none"}:${req.headers["x-api-key"] || "none"}`
+    `${req.headers["x-game-id"]}:${req.headers["x-api-key"]}`
 });
 
-// ---------- SUPABASE ----------
+// ================= SUPABASE =================
 const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
+  CONFIG.SUPABASE_URL,
+  CONFIG.SUPABASE_KEY
 );
 
-// ---------- HELPERS ----------
+// ================= HELPERS =================
+const asyncWrap = fn => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
+
 function generateApiKey() {
   return "ls_" + crypto.randomBytes(24).toString("hex");
 }
@@ -83,27 +92,23 @@ async function verifyApiKey(game_id, api_key) {
   return !!data;
 }
 
-// ---------- API KEY MIDDLEWARE ----------
+// ================= API KEY MIDDLEWARE =================
 async function apiKeyMiddleware(req, res, next) {
-  const { ["x-game-id"]: gameId, ["x-api-key"]: apiKey } = req.headers;
+  const gameId = req.headers["x-game-id"];
+  const apiKey = req.headers["x-api-key"];
   if (!(await verifyApiKey(gameId, apiKey))) {
     return res.status(401).json({ error: "Invalid API key" });
   }
   next();
 }
 
-// ---------- HEALTH ----------
+// ================= HEALTH =================
 app.get("/", (_, res) => {
   res.json({ status: "LaunchSense backend running" });
 });
 
-// ---------- DEMO ----------
-app.get("/api/demo/analytics", (_, res) => {
-  res.json({ demo: true, health: "GO" });
-});
-
-// ---------- CREATE PROJECT ----------
-app.post("/api/projects", async (req, res) => {
+// ================= CREATE PROJECT =================
+app.post("/api/projects", asyncWrap(async (req, res) => {
   const parsed = createProjectSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: "Invalid payload" });
@@ -113,51 +118,90 @@ app.post("/api/projects", async (req, res) => {
   const game_id = "game_" + Date.now();
   const api_key = generateApiKey();
 
-  const { error } = await supabase
-    .from("projects")
-    .insert([{ user_id, name, game_id }]);
-
-  if (error) {
-    return res.status(500).json({ error: "Project creation failed" });
-  }
-
+  await supabase.from("projects").insert({ user_id, name, game_id });
   await supabase.from("api_keys").insert({ game_id, api_key });
 
   res.json({ success: true, game_id, api_key });
-});
+}));
 
-// ---------- DECISION ----------
+// ================= DECISION API =================
 app.post(
   "/api/decision",
   apiKeyLimiter,
   apiKeyMiddleware,
-  async (req, res) => {
+  asyncWrap(async (req, res) => {
     const parsed = decisionSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: "Invalid decision payload" });
+      return res.status(400).json({ error: "Invalid payload" });
+    }
+
+    const { game_id, session_id } = parsed.data;
+
+    // STEP 54: duplicate session guard
+    const { data: existing } = await supabase
+      .from("game_sessions")
+      .select("decision")
+      .eq("game_id", game_id)
+      .eq("session_id", session_id)
+      .maybeSingle();
+
+    if (existing) {
+      return res.json({
+        duplicate: true,
+        decision: existing.decision
+      });
+    }
+
+    // STEP 53: kill-mode lock
+    const { data: lastDecision } = await supabase
+      .from("decisions")
+      .select("final_decision")
+      .eq("game_id", game_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (lastDecision?.final_decision === "KILL") {
+      return res.status(403).json({
+        error: "Game already killed. Decision locked."
+      });
     }
 
     const risk = calculateRiskScore(parsed.data);
     const decision = getDecision(risk);
 
-    await supabase.from("game_sessions").insert({
-      ...parsed.data,
+    // STEP 56: audit trail
+    await supabase.from("decisions").insert({
+      game_id,
       risk_score: risk,
-      decision
+      final_decision: decision
     });
 
+    // STEP 52: DB failure isolation
+    try {
+      await supabase.from("game_sessions").insert({
+        ...parsed.data,
+        risk_score: risk,
+        decision
+      });
+    } catch (e) {
+      console.error("DB write failed", e.message);
+    }
+
     res.json({ risk_score: risk, decision });
-  }
+  })
 );
 
-// ---------- GLOBAL ERROR HANDLER ----------
+// ================= GLOBAL ERROR HANDLER =================
 app.use((err, req, res, next) => {
   console.error("ERR", req.id, err.message);
-  res.status(500).json({ error: "Internal error", request_id: req.id });
+  res.status(500).json({
+    error: "Internal server error",
+    request_id: req.id
+  });
 });
 
-// ---------- START ----------
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log("LaunchSense backend running on", PORT);
+// ================= START =================
+app.listen(CONFIG.PORT, () => {
+  console.log("🚀 LaunchSense running on", CONFIG.PORT);
 });
