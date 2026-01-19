@@ -1,70 +1,84 @@
-// Counterfactual Engine — A2
-// Simulates alternative futures & minimizes regret
+// Counterfactual Engine — A2 HARDENED
+// Deterministic | Regret-Minimized | Production Safe
 
-function simulateDecision({ decision, risk, confidence, momentum }) {
-  switch (decision) {
-    case "GO":
-      return {
-        expected_risk: Math.min(risk + 0.15, 1),
-        burn: "HIGH",
-        upside: "HIGH",
-        confidence: Math.max(confidence - 0.2, 0.2)
-      };
-
-    case "ITERATE":
-      return {
-        expected_risk: Math.max(risk - 0.2, 0),
-        burn: "MEDIUM",
-        upside: "MEDIUM",
-        confidence: Math.min(confidence + 0.1, 1)
-      };
-
-    case "KILL":
-      return {
-        expected_risk: 0.05,
-        burn: "LOW",
-        upside: "LOW",
-        confidence: Math.min(confidence + 0.05, 1)
-      };
-
-    default:
-      return {};
-  }
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
 }
 
-function regretScore(outcome) {
-  let score = 0;
-  if (outcome.burn === "HIGH") score += 2;
-  if (outcome.upside === "LOW") score += 2;
-  score += outcome.expected_risk * 3;
-  return score;
+function simulate(decision, base) {
+  const { risk, confidence, momentum } = base;
+
+  if (decision === "GO") {
+    return {
+      expected_risk: clamp(risk + 0.18 + momentum * 0.05, 0, 1),
+      burn: 0.9,
+      upside: 0.85,
+      confidence: clamp(confidence - 0.15, 0.2, 0.95)
+    };
+  }
+
+  if (decision === "ITERATE") {
+    return {
+      expected_risk: clamp(risk - 0.25, 0, 1),
+      burn: 0.5,
+      upside: 0.6,
+      confidence: clamp(confidence + 0.1, 0.2, 0.95)
+    };
+  }
+
+  if (decision === "KILL") {
+    return {
+      expected_risk: 0.05,
+      burn: 0.1,
+      upside: 0.15,
+      confidence: clamp(confidence + 0.05, 0.2, 0.95)
+    };
+  }
+
+  return null;
+}
+
+function regret(outcome) {
+  return clamp(
+    outcome.burn * 3 +
+      (1 - outcome.upside) * 3 +
+      outcome.expected_risk * 4,
+    0,
+    10
+  );
 }
 
 function buildCounterfactuals(base) {
-  const options = ["GO", "ITERATE", "KILL"];
+  const safeBase = {
+    risk: clamp(base.risk, 0, 1),
+    confidence: clamp(base.confidence, 0.2, 0.95),
+    momentum: clamp(base.momentum || 0, -10, 10)
+  };
 
+  const decisions = ["GO", "ITERATE", "KILL"];
   const simulations = {};
-  options.forEach(opt => {
-    const sim = simulateDecision({ ...base, decision: opt });
-    simulations[opt] = {
-      ...sim,
-      regret: regretScore(sim)
+
+  decisions.forEach(d => {
+    const outcome = simulate(d, safeBase);
+    simulations[d] = {
+      ...outcome,
+      regret: regret(outcome)
     };
   });
 
-  // find minimum regret option
   let safest = "ITERATE";
   let min = Infinity;
 
-  Object.keys(simulations).forEach(k => {
-    if (simulations[k].regret < min) {
-      min = simulations[k].regret;
+  Object.entries(simulations).forEach(([k, v]) => {
+    if (v.regret < min) {
+      min = v.regret;
       safest = k;
     }
   });
 
   return {
     safest_decision: safest,
+    regret_floor: Math.round(min * 100) / 100,
     simulations
   };
 }
