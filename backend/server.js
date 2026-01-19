@@ -1,5 +1,4 @@
-// LaunchSense Backend — Phase 4 + A3 Explainability + OBS
-// Decision Infrastructure Grade (Production)
+// LaunchSense Backend — A4 Learning Engine (Production Final)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -16,7 +15,7 @@ const { buildCounterfactuals } = require("./counterfactualEngine");
 const app = express();
 app.disable("x-powered-by");
 
-/* ================= ENV CHECK ================= */
+/* ================= ENV ================= */
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach(k => {
   if (!process.env[k]) {
     console.error("Missing ENV:", k);
@@ -27,58 +26,41 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "3.0.0-A3-OBS",
+  VERSION: "4.0.0-A4",
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
   ADMIN_TOKEN: process.env.ADMIN_TOKEN || null,
   READONLY: process.env.FEATURE_READONLY === "on",
   SLA_MS: 1500,
-  OBS_SAMPLE_RATE: 1 // keep 1 for now (can downsample later)
+  BASE_GO: 0.35,
+  BASE_KILL: 0.65,
+  LEARN_RATE: 0.03
 };
 
-/* ================= CORE MIDDLEWARE ================= */
+/* ================= MIDDLEWARE ================= */
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: "300kb" }));
 app.use(timeout("12s"));
-app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 600
-  })
-);
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 600 }));
 
-/* ================= OBS CONTEXT ================= */
 app.use((req, res, next) => {
-  req.obs = {
+  req.ctx = {
     request_id: crypto.randomUUID(),
-    path: req.path,
-    method: req.method,
-    start: Date.now(),
-    events: []
+    start: Date.now()
   };
-
   res.on("finish", () => {
-    const duration = Date.now() - req.obs.start;
-    req.obs.duration_ms = duration;
-
-    if (duration > CONFIG.SLA_MS) {
-      console.warn("SLA BREACH", {
-        request_id: req.obs.request_id,
-        path: req.path,
-        duration
-      });
-    }
+    const d = Date.now() - req.ctx.start;
+    if (d > CONFIG.SLA_MS)
+      console.warn("SLA breach", req.path, d);
   });
-
   next();
 });
 
-/* ================= READONLY MODE ================= */
+/* ================= READONLY ================= */
 app.use((req, res, next) => {
-  if (CONFIG.READONLY && req.method !== "GET") {
+  if (CONFIG.READONLY && req.method !== "GET")
     return res.status(503).json({ error: "Maintenance mode" });
-  }
   next();
 });
 
@@ -87,14 +69,13 @@ const supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
 
 /* ================= HELPERS ================= */
 const ok = (res, data) => res.json({ success: true, data });
-const fail = (res, code, msg) =>
-  res.status(code).json({ success: false, error: msg });
+const fail = (res, c, m) =>
+  res.status(c).json({ success: false, error: m });
 
 /* ================= AUTH ================= */
 async function apiAuth(req, res, next) {
   const api_key = req.headers["x-api-key"];
   const game_id = req.headers["x-game-id"];
-
   if (!api_key || !game_id)
     return fail(res, 401, "Missing API credentials");
 
@@ -107,7 +88,6 @@ async function apiAuth(req, res, next) {
     .maybeSingle();
 
   if (!data) return fail(res, 401, "Invalid API key");
-
   req.game_id = game_id;
   next();
 }
@@ -130,85 +110,73 @@ v1.get("/", (_, res) =>
 );
 
 /* =====================================================
-   A3 — EXPLAINABLE DECISION ENGINE
+   A4 — POLICY ADAPTER
    ===================================================== */
-function buildExplanation(input, metrics, decision) {
-  const reasons = [];
+function adaptThresholds(base, stats) {
+  let go = base.go;
+  let kill = base.kill;
 
-  if (metrics.engagement < 0.3) reasons.push("Low player engagement");
-  if (metrics.frustration > 0.6) reasons.push("High frustration signals");
-  if (metrics.early_exit) reasons.push("Early exit detected");
+  if (stats.retention_rate > 0.6) go -= CONFIG.LEARN_RATE;
+  if (stats.rage_rate > 0.4) kill -= CONFIG.LEARN_RATE;
 
-  return {
-    explanation_id: crypto.randomUUID(),
-    decision,
-    confidence: metrics.confidence,
-    primary_factors: reasons,
-    metrics_used: metrics,
-    generated_at: new Date().toISOString()
-  };
+  go = Math.max(0.2, Math.min(go, 0.45));
+  kill = Math.max(0.55, Math.min(kill, 0.8));
+
+  return { go, kill };
 }
 
-/* ================= SDK DECISION (A3 + OBS) ================= */
+/* ================= DECISION SDK ================= */
 v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
     const risk = calculateRiskScore(req.body);
-    let decision = getDecision(risk);
 
-    const metrics = {
-      engagement: Math.min((req.body.playtime || 0) / 600, 1),
-      frustration: Math.min(
-        ((req.body.deaths || 0) * 2 + (req.body.restarts || 0)) / 10,
-        1
-      ),
-      early_exit: !!req.body.early_quit,
-      confidence: Math.round((1 - Math.abs(0.5 - risk)) * 100) / 100
-    };
+    const { data: stats } = await supabase
+      .from("learning_stats")
+      .select("*")
+      .eq("game_id", req.game_id)
+      .maybeSingle();
 
-    const counterfactuals = buildCounterfactuals({ risk, ...metrics });
+    const policy = adaptThresholds(
+      { go: CONFIG.BASE_GO, kill: CONFIG.BASE_KILL },
+      stats || {}
+    );
 
-    if (counterfactuals.safest_decision !== decision) {
-      decision = "REVIEW";
-    }
+    let decision = "ITERATE";
+    if (risk < policy.go) decision = "GO";
+    if (risk > policy.kill) decision = "KILL";
 
-    const explanation = buildExplanation(req.body, metrics, decision);
-
-    /* OBS SNAPSHOT (safe, async, non-blocking) */
-    if (Math.random() <= CONFIG.OBS_SAMPLE_RATE) {
-      const obsPayload = {
-        request_id: req.obs.request_id,
-        game_id: req.game_id,
-        decision,
-        risk_score: Math.round(risk * 100),
-        confidence: explanation.confidence,
-        duration_ms: Date.now() - req.obs.start,
-        created_at: new Date().toISOString()
-      };
-
-      supabase.from("decision_observability").insert(obsPayload).catch(() => {});
-    }
+    const counterfactuals = buildCounterfactuals({ risk });
 
     ok(res, {
       decision,
       risk_score: Math.round(risk * 100),
-      confidence: explanation.confidence,
-      explanation,
+      policy,
       counterfactuals
     });
   } catch (e) {
-    console.error("Decision failure:", e);
+    console.error(e);
     fail(res, 500, "Decision engine failure");
   }
 });
 
-/* ================= ADMIN OBS ================= */
-v1.get("/admin/observability", adminAuth, async (_, res) => {
-  const { data } = await supabase
-    .from("decision_observability")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(100);
+/* ================= OUTCOME INGEST ================= */
+v1.post("/sdk/outcome", apiAuth, async (req, res) => {
+  const { retained, rage_quit } = req.body;
 
+  await supabase.rpc("update_learning_stats", {
+    p_game_id: req.game_id,
+    p_retained: !!retained,
+    p_rage: !!rage_quit
+  });
+
+  ok(res, { learned: true });
+});
+
+/* ================= ADMIN ================= */
+v1.get("/admin/learning", adminAuth, async (_, res) => {
+  const { data } = await supabase
+    .from("learning_stats")
+    .select("*");
   ok(res, data || []);
 });
 
@@ -219,7 +187,7 @@ process.on("SIGINT", () => process.exit(0));
 /* ================= START ================= */
 app.listen(CONFIG.PORT, () => {
   console.log(
-    `LaunchSense ${CONFIG.VERSION} running on port`,
+    `LaunchSense ${CONFIG.VERSION} running on`,
     CONFIG.PORT
   );
 });
