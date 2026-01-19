@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
+const { createProjectSchema, decisionSchema } = require("./validators");
 
 const { createClient } = require("@supabase/supabase-js");
 const { calculateRiskScore, getDecision } = require("./decisionEngine");
