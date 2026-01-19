@@ -1,4 +1,4 @@
-// LaunchSense Backend — Phase 1 (Explainability v2)
+// LaunchSense Backend — Phase 2 (Temporal Intelligence)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -11,6 +11,7 @@ require("dotenv").config();
 const { createClient } = require("@supabase/supabase-js");
 const { calculateRiskScore, getDecision } = require("./decisionEngine");
 const { buildExplanation } = require("./explainEngine");
+const { analyzeTemporal } = require("./temporalEngine");
 
 const app = express();
 app.disable("x-powered-by");
@@ -26,11 +27,11 @@ app.disable("x-powered-by");
 /* ===================== CONFIG ===================== */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "2.1.0-explainability",
+  VERSION: "2.2.0-temporal",
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
   ADMIN_TOKEN: process.env.ADMIN_TOKEN || null,
-  READONLY: process.env.FEATURE_READONLY === "on",
+  READONLY: process.env.FEATURE_READONLY === "on"
 };
 
 /* ===================== MIDDLEWARE ===================== */
@@ -53,7 +54,7 @@ app.use((req, res, next) => {
 /* ===================== READONLY ===================== */
 app.use((req, res, next) => {
   if (CONFIG.READONLY && req.method !== "GET") {
-    return res.status(503).json({ error: "System in maintenance mode" });
+    return res.status(503).json({ error: "Maintenance mode" });
   }
   next();
 });
@@ -84,13 +85,6 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-function adminAuth(req, res, next) {
-  if (!CONFIG.ADMIN_TOKEN) return fail(res, 503, "Admin disabled");
-  if (req.headers["x-admin-token"] !== CONFIG.ADMIN_TOKEN)
-    return fail(res, 401, "Admin auth failed");
-  next();
-}
-
 /* ===================== API ===================== */
 const v1 = express.Router();
 app.use("/v1", v1);
@@ -103,9 +97,30 @@ v1.get("/", (_, res) =>
 /* ===================== DECISION SDK ===================== */
 v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
+    // Step 1: Current risk
     const risk = calculateRiskScore(req.body);
-    const decision = getDecision(risk);
+    let decision = getDecision(risk);
 
+    // Step 2: Fetch history
+    const { data: history } = await supabase
+      .from("daily_analytics")
+      .select("avg_risk")
+      .eq("game_id", req.game_id)
+      .order("date", { ascending: false })
+      .limit(7);
+
+    // Step 3: Temporal analysis
+    const temporal = analyzeTemporal(history || []);
+
+    // Step 4: Decision override (intelligent)
+    if (temporal.shock && decision === "KILL") {
+      decision = "ITERATE";
+    }
+    if (temporal.trend === "DECLINING" && decision === "KILL") {
+      decision = "ITERATE";
+    }
+
+    // Step 5: Explain
     const metrics = {
       engagement: Math.min((req.body.playtime || 0) / 600, 1),
       frustration: Math.min(((req.body.deaths || 0) * 2 + (req.body.restarts || 0)) / 10, 1),
@@ -115,34 +130,29 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
 
     const explanation = buildExplanation(req.body, metrics, decision);
 
+    // Step 6: Persist
     await supabase.from("game_sessions").insert({
       game_id: req.game_id,
       ...req.body,
       risk_score: Math.round(risk * 100),
       decision,
       confidence: explanation.confidence,
-      explanation_id: explanation.explanation_id
+      explanation_id: explanation.explanation_id,
+      temporal_trend: temporal.trend,
+      temporal_volatility: temporal.volatility,
+      temporal_shock: temporal.shock
     });
 
     ok(res, {
       decision,
       risk_score: Math.round(risk * 100),
-      confidence: explanation.confidence,
+      temporal,
       explanation
     });
   } catch (e) {
     console.error(e);
     fail(res, 500, "Decision failed");
   }
-});
-
-/* ===================== ADMIN ===================== */
-v1.get("/admin/system-status", adminAuth, (_, res) => {
-  ok(res, {
-    version: CONFIG.VERSION,
-    readonly: CONFIG.READONLY,
-    explainability: "v2-enabled"
-  });
 });
 
 /* ===================== SHUTDOWN ===================== */
