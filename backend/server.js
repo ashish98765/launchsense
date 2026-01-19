@@ -1,4 +1,4 @@
-// LaunchSense Backend — STEP 38 (Rate Limiting Added)
+// LaunchSense Backend — STEP 38 + STEP 39 (Rate Limiting)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -17,18 +17,30 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ---------------- STEP 38 — GLOBAL RATE LIMITER ----------------
+// ---------------- STEP 38 — GLOBAL IP RATE LIMIT ----------------
 const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // 100 requests per IP
+  windowMs: 15 * 60 * 1000, // 15 min
+  max: 100, // per IP
   standardHeaders: true,
   legacyHeaders: false,
-  message: {
-    error: "Too many requests. Please slow down."
-  }
+  message: { error: "Too many requests from this IP. Slow down." }
 });
-
 app.use(globalLimiter);
+
+// ---------------- STEP 39 — API KEY RATE LIMIT ----------------
+// key = game_id + api_key (per game protection)
+const apiKeyLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 100, // per game per minute
+  keyGenerator: (req) => {
+    const gameId = req.headers["x-game-id"] || "unknown-game";
+    const apiKey = req.headers["x-api-key"] || "unknown-key";
+    return `${gameId}:${apiKey}`;
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "API rate limit exceeded for this game." }
+});
 
 // ---------------- SUPABASE ----------------
 const supabase = createClient(
@@ -91,7 +103,6 @@ app.get("/api/demo/analytics", (req, res) => {
 app.post("/api/projects", async (req, res) => {
   try {
     const parsed = createProjectSchema.safeParse(req.body);
-
     if (!parsed.success) {
       return res.status(400).json({
         error: "Invalid request body",
@@ -116,11 +127,7 @@ app.post("/api/projects", async (req, res) => {
 
     if (keyError) throw keyError;
 
-    res.json({
-      success: true,
-      project,
-      api_key
-    });
+    res.json({ success: true, project, api_key });
   } catch (e) {
     res.status(500).json({
       error: "Project creation failed",
@@ -138,116 +145,124 @@ app.get("/api/projects", async (req, res) => {
       .order("created_at", { ascending: false });
 
     if (error) throw error;
-
     res.json({ success: true, projects: data });
   } catch (e) {
     res.status(500).json({ error: "Failed to fetch projects" });
   }
 });
 
-// ================= DECISION API =================
-app.post("/api/decision", apiKeyMiddleware, async (req, res) => {
-  try {
-    const parsed = decisionSchema.safeParse(req.body);
+// ================= DECISION API (PROTECTED + RATE LIMITED) =================
+app.post(
+  "/api/decision",
+  apiKeyLimiter,
+  apiKeyMiddleware,
+  async (req, res) => {
+    try {
+      const parsed = decisionSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: "Invalid decision payload",
+          details: parsed.error.errors
+        });
+      }
 
-    if (!parsed.success) {
-      return res.status(400).json({
-        error: "Invalid decision payload",
-        details: parsed.error.errors
-      });
-    }
-
-    const {
-      game_id,
-      player_id,
-      session_id,
-      playtime,
-      deaths,
-      restarts,
-      early_quit
-    } = parsed.data;
-
-    const risk_score = calculateRiskScore({
-      playtime,
-      deaths,
-      restarts,
-      earlyQuit: early_quit
-    });
-
-    const decision = getDecision(risk_score);
-
-    await supabase.from("game_sessions").insert({
-      game_id,
-      player_id,
-      session_id,
-      playtime,
-      deaths,
-      restarts,
-      early_quit,
-      risk_score,
-      decision
-    });
-
-    res.json({ success: true, risk_score, decision });
-  } catch (e) {
-    res.status(500).json({ error: "Decision API failed" });
-  }
-});
-
-// ================= ANALYTICS =================
-app.get("/api/analytics/:game_id", apiKeyMiddleware, async (req, res) => {
-  try {
-    const { game_id } = req.params;
-
-    const { data } = await supabase
-      .from("game_sessions")
-      .select("decision, risk_score")
-      .eq("game_id", game_id);
-
-    if (!data || data.length === 0) {
-      return res.json({
+      const {
         game_id,
-        total_sessions: 0,
-        go_percent: 0,
-        iterate_percent: 0,
-        kill_percent: 0,
-        average_risk: 0,
-        health: "ITERATE"
+        player_id,
+        session_id,
+        playtime,
+        deaths,
+        restarts,
+        early_quit
+      } = parsed.data;
+
+      const risk_score = calculateRiskScore({
+        playtime,
+        deaths,
+        restarts,
+        earlyQuit: early_quit
       });
+
+      const decision = getDecision(risk_score);
+
+      await supabase.from("game_sessions").insert({
+        game_id,
+        player_id,
+        session_id,
+        playtime,
+        deaths,
+        restarts,
+        early_quit,
+        risk_score,
+        decision
+      });
+
+      res.json({ success: true, risk_score, decision });
+    } catch (e) {
+      res.status(500).json({ error: "Decision API failed" });
     }
-
-    let go = 0,
-      iterate = 0,
-      kill = 0,
-      riskSum = 0;
-
-    data.forEach(s => {
-      riskSum += s.risk_score;
-      if (s.decision === "GO") go++;
-      else if (s.decision === "ITERATE") iterate++;
-      else kill++;
-    });
-
-    const total = data.length;
-    const avgRisk = Math.round(riskSum / total);
-
-    let health = "ITERATE";
-    if (go / total > 0.6 && avgRisk < 40) health = "GO";
-    if (kill / total > 0.3 && avgRisk > 65) health = "KILL";
-
-    res.json({
-      game_id,
-      total_sessions: total,
-      go_percent: Math.round((go / total) * 100),
-      iterate_percent: Math.round((iterate / total) * 100),
-      kill_percent: Math.round((kill / total) * 100),
-      average_risk: avgRisk,
-      health
-    });
-  } catch (e) {
-    res.status(500).json({ error: "Analytics failed" });
   }
-});
+);
+
+// ================= ANALYTICS (PROTECTED + RATE LIMITED) =================
+app.get(
+  "/api/analytics/:game_id",
+  apiKeyLimiter,
+  apiKeyMiddleware,
+  async (req, res) => {
+    try {
+      const { game_id } = req.params;
+
+      const { data } = await supabase
+        .from("game_sessions")
+        .select("decision, risk_score")
+        .eq("game_id", game_id);
+
+      if (!data || data.length === 0) {
+        return res.json({
+          game_id,
+          total_sessions: 0,
+          go_percent: 0,
+          iterate_percent: 0,
+          kill_percent: 0,
+          average_risk: 0,
+          health: "ITERATE"
+        });
+      }
+
+      let go = 0,
+        iterate = 0,
+        kill = 0,
+        riskSum = 0;
+
+      data.forEach(s => {
+        riskSum += s.risk_score;
+        if (s.decision === "GO") go++;
+        else if (s.decision === "ITERATE") iterate++;
+        else kill++;
+      });
+
+      const total = data.length;
+      const avgRisk = Math.round(riskSum / total);
+
+      let health = "ITERATE";
+      if (go / total > 0.6 && avgRisk < 40) health = "GO";
+      if (kill / total > 0.3 && avgRisk > 65) health = "KILL";
+
+      res.json({
+        game_id,
+        total_sessions: total,
+        go_percent: Math.round((go / total) * 100),
+        iterate_percent: Math.round((iterate / total) * 100),
+        kill_percent: Math.round((kill / total) * 100),
+        average_risk: avgRisk,
+        health
+      });
+    } catch (e) {
+      res.status(500).json({ error: "Analytics failed" });
+    }
+  }
+);
 
 // ================= START SERVER =================
 const PORT = process.env.PORT || 3001;
