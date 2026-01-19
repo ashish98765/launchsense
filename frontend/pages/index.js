@@ -1,7 +1,6 @@
 export default function Home() {
   return (
     <main style={{ padding: "80px 24px", maxWidth: 900, margin: "0 auto" }}>
-      
       {/* HERO */}
       <h1 style={{ fontSize: 42, marginBottom: 16 }}>
         Make game decisions with data, not hope.
@@ -12,7 +11,7 @@ export default function Home() {
         so studios can decide what to build next — calmly and early.
       </p>
 
-      {/* CTA */}
+      {/* PRIMARY CTA */}
       <div style={{ marginBottom: 48 }}>
         <a
           href="/signup"
@@ -36,7 +35,7 @@ export default function Home() {
         </a>
       </div>
 
-      {/* WHO IS THIS FOR */}
+      {/* WHO IT IS FOR */}
       <section style={{ marginBottom: 48 }}>
         <h2>Built for</h2>
         <ul>
@@ -50,14 +49,16 @@ export default function Home() {
       <section style={{ marginBottom: 48 }}>
         <h2>The problem</h2>
         <p style={{ color: "#555" }}>
-          Most game teams rely on instinct and hope.
-          After months of work, they realize too late that a game is not viable.
+          Most games rely on instinct and hope.
+          After months of work, teams realise too late that a game is not viable.
+        </p>
+        <p style={{ color: "#555" }}>
           LaunchSense exists to reduce that risk — early.
         </p>
       </section>
 
       {/* WHAT IT DOES */}
-      <section>
+      <section style={{ marginBottom: 48 }}>
         <h2>What LaunchSense does</h2>
         <ul>
           <li>Reads early gameplay behaviour</li>
@@ -66,9 +67,9 @@ export default function Home() {
         </ul>
       </section>
 
-        {/* HOW IT WORKS */}
-      <section style={{ marginTop: 80, marginBottom: 48 }}>
-        <h2>How LaunchSense works</h2>
+      {/* HOW IT WORKS */}
+      <section style={{ marginBottom: 80 }}>
+        <h2>How it works</h2>
         <ol style={{ color: "#555" }}>
           <li>Share early gameplay behaviour from test builds</li>
           <li>LaunchSense analyzes patterns that indicate risk</li>
@@ -83,7 +84,7 @@ export default function Home() {
         <h2>What LaunchSense does not do</h2>
         <ul style={{ color: "#555" }}>
           <li>It does not predict guaranteed success or failure</li>
-          <li>It does not replace creative or design judgment</li>
+          <li>It does not replace creative design judgment</li>
           <li>It does not force decisions on your team</li>
         </ul>
         <p style={{ marginTop: 12, color: "#666" }}>
@@ -91,7 +92,7 @@ export default function Home() {
         </p>
       </section>
 
-      {/* WHY EARLY DATA MATTERS */}
+      {/* WHY EARLY DATA */}
       <section style={{ marginBottom: 48 }}>
         <h2>Why early data matters</h2>
         <p style={{ color: "#555" }}>
@@ -103,7 +104,7 @@ export default function Home() {
         </p>
       </section>
 
-      {/* SAMPLE ANALYSIS PREVIEW */}
+      {/* SAMPLE ANALYSIS */}
       <section style={{ marginBottom: 48 }}>
         <h2>Example: early gameplay analysis</h2>
 
@@ -119,7 +120,9 @@ export default function Home() {
           <p><strong>Risk level:</strong> High</p>
           <p><strong>Pattern strength:</strong> Medium</p>
 
-          <p style={{ marginTop: 12 }}><strong>Key signals:</strong></p>
+          <p style={{ marginTop: 12 }}>
+            <strong>Key signals:</strong>
+          </p>
           <ul>
             <li>Short play sessions</li>
             <li>High early deaths</li>
@@ -152,6 +155,7 @@ export default function Home() {
             borderRadius: 6,
             marginRight: 12,
             textDecoration: "none",
+            color: "#000",
           }}
         >
           View a sample analysis →
@@ -203,22 +207,15 @@ export default function Home() {
       {/* FOOTER */}
       <footer style={{ borderTop: "1px solid #eee", paddingTop: 24 }}>
         <p style={{ fontSize: 14, color: "#666" }}>
-          <a href="/methodology" style={{ marginRight: 16 }}>
-            Methodology
-          </a>
-          <a href="/sdk" style={{ marginRight: 16 }}>
-            SDK
-          </a>
-          <a href="/pricing">
-            Pricing
-          </a>
+          <a href="/methodology" style={{ marginRight: 16 }}>Methodology</a>
+          <a href="/sdk" style={{ marginRight: 16 }}>SDK</a>
+          <a href="/pricing">Pricing</a>
         </p>
 
         <p style={{ fontSize: 14, color: "#666", marginTop: 12 }}>
           LaunchSense supports decisions. It never replaces creative judgment.
         </p>
       </footer>
-      
     </main>
   );
 }
