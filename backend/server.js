@@ -1,4 +1,4 @@
-// LaunchSense Backend — Batch 1 (Decision Trust & Safety)
+// LaunchSense Backend — Batch 2 (Human Override + Decision Ledger)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -26,7 +26,7 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "5.0.0-BATCH1",
+  VERSION: "5.1.0-BATCH2",
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
   BASE_GO: 0.35,
@@ -49,6 +49,14 @@ const supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
 const ok = (res, data) => res.json({ success: true, data });
 const fail = (res, c, m) =>
   res.status(c).json({ success: false, error: m });
+
+async function safeLedgerInsert(payload) {
+  try {
+    await supabase.from("decision_ledger").insert(payload);
+  } catch (_) {
+    // ledger optional for now (SQL later)
+  }
+}
 
 /* ================= AUTH ================= */
 async function apiAuth(req, res, next) {
@@ -99,31 +107,42 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
 
     const drift = detectDrift(risk, history?.avg_risk);
 
-    let decision = "ITERATE";
-    if (risk < CONFIG.BASE_GO) decision = "GO";
-    if (risk > CONFIG.BASE_KILL) decision = "KILL";
+    let ai_decision = "ITERATE";
+    if (risk < CONFIG.BASE_GO) ai_decision = "GO";
+    if (risk > CONFIG.BASE_KILL) ai_decision = "KILL";
 
     const confidence_raw = 1 - Math.abs(0.5 - risk);
     const stability = drift ? 0.4 : 0.85;
+    const confidence =
+      Math.round(confidence_raw * stability * 100) / 100;
 
-    const confidence = Math.round(
-      confidence_raw * stability * 100
-    ) / 100;
+    let decision = ai_decision;
+    let kill_pending = false;
+    if (decision === "KILL") {
+      decision = "KILL_PENDING";
+      kill_pending = true;
+    }
 
     const counterfactuals = buildCounterfactuals({ risk });
 
-    let kill_pending = false;
-    if (decision === "KILL") {
-      kill_pending = true;
-      decision = "KILL_PENDING";
-    }
+    // Ledger: AI decision
+    await safeLedgerInsert({
+      id: crypto.randomUUID(),
+      game_id: req.game_id,
+      source: "AI",
+      ai_decision,
+      final_decision: decision,
+      risk_score: risk,
+      confidence,
+      created_at: new Date().toISOString()
+    });
 
     ok(res, {
       decision,
+      ai_decision,
       risk_score: Math.round(risk * 100),
       confidence,
       confidence_band: confidenceBand(confidence),
-      stability_score: stability,
       drift_detected: drift,
       kill_pending,
       cooling_hours: kill_pending
@@ -135,6 +154,27 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
     console.error(e);
     fail(res, 500, "Decision failure");
   }
+});
+
+/* ================= HUMAN OVERRIDE ================= */
+v1.post("/decision/override", apiAuth, async (req, res) => {
+  const { final_decision, reason } = req.body;
+  if (!final_decision || !reason)
+    return fail(res, 400, "Missing override data");
+
+  await safeLedgerInsert({
+    id: crypto.randomUUID(),
+    game_id: req.game_id,
+    source: "HUMAN",
+    final_decision,
+    reason,
+    created_at: new Date().toISOString()
+  });
+
+  ok(res, {
+    overridden: true,
+    final_decision
+  });
 });
 
 /* ================= START ================= */
