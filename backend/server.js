@@ -1,4 +1,4 @@
-// LaunchSense Backend — A4 Learning Engine (Production Final)
+// LaunchSense Backend — Batch 1 (Decision Trust & Safety)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -9,7 +9,7 @@ const rateLimit = require("express-rate-limit");
 require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
-const { calculateRiskScore, getDecision } = require("./decisionEngine");
+const { calculateRiskScore } = require("./decisionEngine");
 const { buildCounterfactuals } = require("./counterfactualEngine");
 
 const app = express();
@@ -26,43 +26,21 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "4.0.0-A4",
+  VERSION: "5.0.0-BATCH1",
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_KEY: process.env.SUPABASE_SERVICE_KEY,
-  ADMIN_TOKEN: process.env.ADMIN_TOKEN || null,
-  READONLY: process.env.FEATURE_READONLY === "on",
-  SLA_MS: 1500,
   BASE_GO: 0.35,
   BASE_KILL: 0.65,
-  LEARN_RATE: 0.03
+  DRIFT_THRESHOLD: 0.18,
+  KILL_COOLING_HOURS: 48
 };
 
-/* ================= MIDDLEWARE ================= */
+/* ================= CORE ================= */
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: "300kb" }));
 app.use(timeout("12s"));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 600 }));
-
-app.use((req, res, next) => {
-  req.ctx = {
-    request_id: crypto.randomUUID(),
-    start: Date.now()
-  };
-  res.on("finish", () => {
-    const d = Date.now() - req.ctx.start;
-    if (d > CONFIG.SLA_MS)
-      console.warn("SLA breach", req.path, d);
-  });
-  next();
-});
-
-/* ================= READONLY ================= */
-app.use((req, res, next) => {
-  if (CONFIG.READONLY && req.method !== "GET")
-    return res.status(503).json({ error: "Maintenance mode" });
-  next();
-});
 
 /* ================= SUPABASE ================= */
 const supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
@@ -92,102 +70,77 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-function adminAuth(req, res, next) {
-  if (!CONFIG.ADMIN_TOKEN)
-    return fail(res, 503, "Admin disabled");
-  if (req.headers["x-admin-token"] !== CONFIG.ADMIN_TOKEN)
-    return fail(res, 401, "Admin auth failed");
-  next();
-}
-
 /* ================= ROUTER ================= */
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ================= HEALTH ================= */
-v1.get("/", (_, res) =>
-  ok(res, { status: "live", version: CONFIG.VERSION })
-);
-
-/* =====================================================
-   A4 — POLICY ADAPTER
-   ===================================================== */
-function adaptThresholds(base, stats) {
-  let go = base.go;
-  let kill = base.kill;
-
-  if (stats.retention_rate > 0.6) go -= CONFIG.LEARN_RATE;
-  if (stats.rage_rate > 0.4) kill -= CONFIG.LEARN_RATE;
-
-  go = Math.max(0.2, Math.min(go, 0.45));
-  kill = Math.max(0.55, Math.min(kill, 0.8));
-
-  return { go, kill };
+/* ================= UTILS ================= */
+function confidenceBand(score) {
+  if (score >= 0.75) return "HIGH";
+  if (score >= 0.5) return "MEDIUM";
+  return "LOW";
 }
 
-/* ================= DECISION SDK ================= */
+function detectDrift(current, historical) {
+  if (!historical) return false;
+  return Math.abs(current - historical) > CONFIG.DRIFT_THRESHOLD;
+}
+
+/* ================= DECISION ================= */
 v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
     const risk = calculateRiskScore(req.body);
 
-    const { data: stats } = await supabase
-      .from("learning_stats")
-      .select("*")
+    const { data: history } = await supabase
+      .from("risk_history")
+      .select("avg_risk")
       .eq("game_id", req.game_id)
       .maybeSingle();
 
-    const policy = adaptThresholds(
-      { go: CONFIG.BASE_GO, kill: CONFIG.BASE_KILL },
-      stats || {}
-    );
+    const drift = detectDrift(risk, history?.avg_risk);
 
     let decision = "ITERATE";
-    if (risk < policy.go) decision = "GO";
-    if (risk > policy.kill) decision = "KILL";
+    if (risk < CONFIG.BASE_GO) decision = "GO";
+    if (risk > CONFIG.BASE_KILL) decision = "KILL";
+
+    const confidence_raw = 1 - Math.abs(0.5 - risk);
+    const stability = drift ? 0.4 : 0.85;
+
+    const confidence = Math.round(
+      confidence_raw * stability * 100
+    ) / 100;
 
     const counterfactuals = buildCounterfactuals({ risk });
+
+    let kill_pending = false;
+    if (decision === "KILL") {
+      kill_pending = true;
+      decision = "KILL_PENDING";
+    }
 
     ok(res, {
       decision,
       risk_score: Math.round(risk * 100),
-      policy,
+      confidence,
+      confidence_band: confidenceBand(confidence),
+      stability_score: stability,
+      drift_detected: drift,
+      kill_pending,
+      cooling_hours: kill_pending
+        ? CONFIG.KILL_COOLING_HOURS
+        : null,
       counterfactuals
     });
   } catch (e) {
     console.error(e);
-    fail(res, 500, "Decision engine failure");
+    fail(res, 500, "Decision failure");
   }
 });
-
-/* ================= OUTCOME INGEST ================= */
-v1.post("/sdk/outcome", apiAuth, async (req, res) => {
-  const { retained, rage_quit } = req.body;
-
-  await supabase.rpc("update_learning_stats", {
-    p_game_id: req.game_id,
-    p_retained: !!retained,
-    p_rage: !!rage_quit
-  });
-
-  ok(res, { learned: true });
-});
-
-/* ================= ADMIN ================= */
-v1.get("/admin/learning", adminAuth, async (_, res) => {
-  const { data } = await supabase
-    .from("learning_stats")
-    .select("*");
-  ok(res, data || []);
-});
-
-/* ================= SHUTDOWN ================= */
-process.on("SIGTERM", () => process.exit(0));
-process.on("SIGINT", () => process.exit(0));
 
 /* ================= START ================= */
 app.listen(CONFIG.PORT, () => {
   console.log(
-    `LaunchSense ${CONFIG.VERSION} running on`,
+    `LaunchSense ${CONFIG.VERSION} running`,
     CONFIG.PORT
   );
 });
