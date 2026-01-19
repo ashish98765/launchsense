@@ -1,4 +1,4 @@
-// LaunchSense Backend — Phase 4 + A2 Counterfactual Intelligence
+// LaunchSense Backend — Phase 4 + A2 Counterfactual Intelligence (Hardened)
 
 const crypto = require("crypto");
 const express = require("express");
@@ -38,13 +38,19 @@ app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: "300kb" }));
 app.use(timeout("12s"));
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 600 }));
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 600
+  })
+);
 
+// request context
 app.use((req, res, next) => {
   req.id = crypto.randomUUID();
-  req._start = Date.now();
+  const start = Date.now();
   res.on("finish", () => {
-    const ms = Date.now() - req._start;
+    const ms = Date.now() - start;
     if (ms > 1500) console.warn("SLOW", req.path, ms);
   });
   next();
@@ -63,13 +69,16 @@ const supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
 
 /* ================= HELPERS ================= */
 const ok = (res, data) => res.json({ success: true, data });
-const fail = (res, c, m) => res.status(c).json({ success: false, error: m });
+const fail = (res, code, msg) =>
+  res.status(code).json({ success: false, error: msg });
 
 /* ================= AUTH ================= */
 async function apiAuth(req, res, next) {
   const api_key = req.headers["x-api-key"];
   const game_id = req.headers["x-game-id"];
-  if (!api_key || !game_id) return fail(res, 401, "Missing API credentials");
+
+  if (!api_key || !game_id)
+    return fail(res, 401, "Missing API credentials");
 
   const { data } = await supabase
     .from("api_keys")
@@ -80,12 +89,14 @@ async function apiAuth(req, res, next) {
     .maybeSingle();
 
   if (!data) return fail(res, 401, "Invalid API key");
+
   req.game_id = game_id;
   next();
 }
 
 function adminAuth(req, res, next) {
-  if (!CONFIG.ADMIN_TOKEN) return fail(res, 503, "Admin disabled");
+  if (!CONFIG.ADMIN_TOKEN)
+    return fail(res, 503, "Admin disabled");
   if (req.headers["x-admin-token"] !== CONFIG.ADMIN_TOKEN)
     return fail(res, 401, "Admin auth failed");
   next();
@@ -117,7 +128,12 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
     ok(res, {
       decision: baseDecision,
       risk_score: Math.round(risk * 100),
-      counterfactuals
+      counterfactuals,
+      safety: {
+        locked_if_unstable:
+          counterfactuals.safest_decision !== baseDecision,
+        recommended: counterfactuals.safest_decision
+      }
     });
   } catch (e) {
     console.error("Decision error:", e);
@@ -129,11 +145,19 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
 v1.get("/admin/system-status", adminAuth, async (_, res) => {
   ok(res, {
     version: CONFIG.VERSION,
-    readonly: CONFIG.READONLY
+    readonly: CONFIG.READONLY,
+    admin_enabled: !!CONFIG.ADMIN_TOKEN
   });
 });
 
+/* ================= SHUTDOWN ================= */
+process.on("SIGTERM", () => process.exit(0));
+process.on("SIGINT", () => process.exit(0));
+
 /* ================= START ================= */
 app.listen(CONFIG.PORT, () => {
-  console.log(`LaunchSense ${CONFIG.VERSION} running on`, CONFIG.PORT);
+  console.log(
+    `LaunchSense ${CONFIG.VERSION} running on port`,
+    CONFIG.PORT
+  );
 });
