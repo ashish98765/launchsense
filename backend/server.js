@@ -1,5 +1,5 @@
-// LaunchSense Backend — Layer 3 / Batch 3
-// Focus: Observability, Logging, Tracing
+// LaunchSense Backend — Layer 4 / Batch 4
+// Persistence + Decision Memory
 
 const express = require("express");
 const cors = require("cors");
@@ -25,7 +25,7 @@ app.disable("x-powered-by");
 /* ===================== CONFIG ===================== */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L3-B3",
+  VERSION: "L4-B4",
   BASE_GO: 0.35,
   BASE_KILL: 0.65,
 };
@@ -43,13 +43,14 @@ const supabase = createClient(
 
 /* ===================== LOGGER ===================== */
 function log(level, message, meta = {}) {
-  const entry = {
-    ts: new Date().toISOString(),
-    level,
-    message,
-    ...meta,
-  };
-  console.log(JSON.stringify(entry));
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      level,
+      message,
+      ...meta,
+    })
+  );
 }
 
 /* ===================== REQUEST TRACE ===================== */
@@ -101,9 +102,8 @@ async function apiAuth(req, res, next) {
     const apiKey = req.headers["x-api-key"];
     const gameId = req.headers["x-game-id"];
 
-    if (!apiKey || !gameId) {
+    if (!apiKey || !gameId)
       return fail(res, 401, "Missing API credentials");
-    }
 
     const { data } = await supabase
       .from("api_keys")
@@ -128,13 +128,10 @@ function validateDecisionPayload(req, res, next) {
   const { sessions, events } = req.body || {};
 
   if (!Array.isArray(sessions) || sessions.length === 0)
-    return fail(res, 400, "Invalid sessions array");
+    return fail(res, 400, "Invalid sessions");
 
   if (!Array.isArray(events))
-    return fail(res, 400, "Invalid events array");
-
-  if (sessions.length > 500)
-    return fail(res, 413, "Too many sessions");
+    return fail(res, 400, "Invalid events");
 
   next();
 }
@@ -146,11 +143,9 @@ app.use("/v1", v1);
 /* ===================== HELPERS ===================== */
 function personaView(decision, risk) {
   return {
-    founder: `Risk ${Math.round(risk * 100)}%, decision ${decision}`,
+    founder: `Risk ${Math.round(risk * 100)}%`,
     designer:
-      decision === "GO"
-        ? "Engagement healthy"
-        : "Friction detected",
+      decision === "GO" ? "Engagement healthy" : "Friction detected",
     investor:
       risk < 0.4
         ? "Low risk"
@@ -160,19 +155,7 @@ function personaView(decision, risk) {
   };
 }
 
-function benchmarkSignal(risk) {
-  if (risk < 0.35) return "Above industry average";
-  if (risk > 0.65) return "Below industry average";
-  return "Within industry norms";
-}
-
-function explainPlain(decision) {
-  if (decision === "GO") return "Players are staying engaged.";
-  if (decision === "KILL") return "Players exit early.";
-  return "Mixed signals detected.";
-}
-
-/* ===================== ENDPOINT ===================== */
+/* ===================== DECISION ===================== */
 v1.post(
   "/sdk/decision",
   sdkLimiter,
@@ -186,8 +169,17 @@ v1.post(
       if (risk < CONFIG.BASE_GO) decision = "GO";
       if (risk > CONFIG.BASE_KILL) decision = "KILL";
 
-      log("info", "decision_computed", {
-        request_id: req.request_id,
+      // 🔥 SAVE TO DATABASE
+      await supabase.from("decision_logs").insert({
+        game_id: req.game_id,
+        decision,
+        risk_score: Math.round(risk * 100),
+        sessions_count: req.body.sessions.length,
+        events_count: req.body.events.length,
+      });
+
+      log("info", "decision_saved", {
+        game_id: req.game_id,
         decision,
         risk,
       });
@@ -196,16 +188,11 @@ v1.post(
         decision,
         risk_score: Math.round(risk * 100),
         personas: personaView(decision, risk),
-        benchmark: benchmarkSignal(risk),
-        plain_english: explainPlain(decision),
         version: CONFIG.VERSION,
       });
     } catch (e) {
-      log("error", "decision_error", {
-        request_id: req.request_id,
-        error: e.message,
-      });
-      fail(res, 500, "Decision processing failed");
+      log("error", "decision_error", { error: e.message });
+      fail(res, 500, "Decision failed");
     }
   }
 );
