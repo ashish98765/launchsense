@@ -1,5 +1,5 @@
-// LaunchSense Backend — Batch 11
-// Kill-Mode Lock + Irreversible Audit Trail
+// LaunchSense Backend — Batch 12
+// Export Engine (CSV)
 // FULL REPLACE server.js | Render-ready
 
 const express = require("express");
@@ -7,6 +7,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const crypto = require("crypto");
+const { Parser } = require("json2csv");
 require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
@@ -26,7 +27,7 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L11-KILL-LOCK",
+  VERSION: "L12-EXPORT",
   GO: 0.35,
   KILL: 0.65,
 };
@@ -88,99 +89,70 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-/* ================= CHECK KILL LOCK ================= */
-async function isKilled(game_id) {
-  const { data } = await supabase
-    .from("kill_locks")
-    .select("locked_at")
-    .eq("game_id", game_id)
-    .maybeSingle();
-
-  return !!data;
-}
-
 /* ================= ROUTER ================= */
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ================= DECISION API ================= */
-v1.post("/sdk/decision", apiAuth, async (req, res) => {
+/* ================= EXPORT DECISIONS ================= */
+v1.get("/export/decisions", apiAuth, async (req, res) => {
   try {
-    if (await isKilled(req.game_id)) {
-      return fail(
-        res,
-        423,
-        "Game is permanently locked (KILL confirmed)."
-      );
-    }
+    const { data, error } = await supabase
+      .from("decision_logs")
+      .select(
+        "created_at, build_version, decision, risk_score, trend"
+      )
+      .eq("game_id", req.game_id)
+      .order("created_at", { ascending: true });
 
-    const metrics = {
-      avg_playtime: req.body.avg_playtime || 0,
-      deaths_per_session: req.body.deaths_per_session || 0,
-      early_quit_rate: req.body.early_quit_rate || 0,
-      sessions_reported: req.body.sessions_reported || 0,
-      build_version: req.body.build_version || "unknown",
-    };
+    if (error) throw error;
+    if (!data || data.length === 0)
+      return fail(res, 404, "No decision data available");
 
-    const riskRaw = calculateRiskScore(metrics);
-    const risk = Math.round(riskRaw * 100);
-
-    let decision = "ITERATE";
-    if (riskRaw < CONFIG.GO) decision = "GO";
-    if (riskRaw > CONFIG.KILL) decision = "KILL";
-
-    await supabase.from("decision_logs").insert({
-      game_id: req.game_id,
-      studio_id: req.studio_id,
-      decision,
-      risk_score: risk,
-      build_version: metrics.build_version,
+    const parser = new Parser({
+      fields: [
+        "created_at",
+        "build_version",
+        "decision",
+        "risk_score",
+        "trend",
+      ],
     });
 
-    ok(res, {
-      decision,
-      risk_score: risk,
-      kill_lock_required: decision === "KILL",
-      version: CONFIG.VERSION,
-    });
+    const csv = parser.parse(data);
+
+    res.header("Content-Type", "text/csv");
+    res.attachment(`launchsense-decisions-${req.game_id}.csv`);
+    res.send(csv);
   } catch (e) {
     console.error(e);
-    fail(res, 500, "Decision engine error");
+    fail(res, 500, "CSV export failed");
   }
 });
 
-/* ================= CONFIRM KILL ================= */
-v1.post("/sdk/confirm-kill", apiAuth, async (req, res) => {
+/* ================= EXPORT AUDIT ================= */
+v1.get("/export/audit", apiAuth, async (req, res) => {
   try {
-    if (await isKilled(req.game_id)) {
-      return fail(res, 409, "Game already permanently killed.");
-    }
+    const { data } = await supabase
+      .from("audit_logs")
+      .select("created_at, action, meta")
+      .eq("game_id", req.game_id)
+      .order("created_at", { ascending: true });
 
-    const reason = req.body.reason || "No reason provided";
+    if (!data || data.length === 0)
+      return fail(res, 404, "No audit logs");
 
-    await supabase.from("kill_locks").insert({
-      game_id: req.game_id,
-      studio_id: req.studio_id,
-      reason,
-      locked_at: new Date().toISOString(),
+    const parser = new Parser({
+      fields: ["created_at", "action", "meta"],
     });
 
-    await supabase.from("audit_logs").insert({
-      game_id: req.game_id,
-      studio_id: req.studio_id,
-      action: "KILL_CONFIRMED",
-      meta: { reason },
-    });
+    const csv = parser.parse(data);
 
-    ok(res, {
-      status: "LOCKED",
-      message:
-        "Game permanently locked. No further decisions or data accepted.",
-      version: CONFIG.VERSION,
-    });
+    res.header("Content-Type", "text/csv");
+    res.attachment(`launchsense-audit-${req.game_id}.csv`);
+    res.send(csv);
   } catch (e) {
     console.error(e);
-    fail(res, 500, "Kill lock failed");
+    fail(res, 500, "Audit export failed");
   }
 });
 
