@@ -1,6 +1,6 @@
-// LaunchSense Backend — Batch 9
-// Recommendation Engine Layer
-// Full replace server.js | Render-ready
+// LaunchSense Backend — Batch 10
+// Trend & Comparison Engine
+// FULL REPLACE server.js | Render-ready
 
 const express = require("express");
 const cors = require("cors");
@@ -15,7 +15,7 @@ const { calculateRiskScore } = require("./decisionEngine");
 const app = express();
 app.disable("x-powered-by");
 
-/* ================= ENV CHECK ================= */
+/* ================= ENV ================= */
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach((k) => {
   if (!process.env[k]) {
     console.error("Missing ENV:", k);
@@ -26,7 +26,7 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L9-RECOMMEND",
+  VERSION: "L10-TRENDS",
   GO: 0.35,
   KILL: 0.65,
 };
@@ -88,85 +88,51 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-/* ================= ABUSE CHECK ================= */
-function detectAbuse(metrics) {
+/* ================= ABUSE ================= */
+function trustAdjust(metrics) {
   let trust = 1.0;
-  let flags = [];
-
-  if (metrics.avg_playtime > 36000) {
-    trust -= 0.4;
-    flags.push("IMPOSSIBLE_PLAYTIME");
-  }
-  if (metrics.deaths_per_session > 50) {
-    trust -= 0.3;
-    flags.push("BOT_PATTERN");
-  }
-  if (metrics.early_quit_rate === 0 || metrics.early_quit_rate === 1) {
-    trust -= 0.2;
-    flags.push("UNNATURAL_QUIT_RATE");
-  }
-
-  trust = Math.max(trust, 0.1);
-  return { trust_score: trust, abuse_flags: flags };
+  if (metrics.avg_playtime > 36000) trust -= 0.4;
+  if (metrics.deaths_per_session > 50) trust -= 0.3;
+  trust = Math.max(trust, 0.2);
+  return trust;
 }
 
-/* ================= RECOMMENDATION ENGINE ================= */
-function generateRecommendations(metrics) {
-  const fixes = [];
-
-  if (metrics.avg_playtime < 300) {
-    fixes.push({
-      area: "Onboarding",
-      severity: "HIGH",
-      recommendation:
-        "Players are leaving too early. Simplify tutorial, reduce initial friction, and deliver core fun within first 60 seconds.",
-    });
+/* ================= TREND ANALYSIS ================= */
+function analyzeTrend(current, previous) {
+  if (!previous) {
+    return {
+      trend: "NO_BASELINE",
+      insight: "First build data. No comparison available yet.",
+    };
   }
 
-  if (metrics.deaths_per_session > 10) {
-    fixes.push({
-      area: "Difficulty Curve",
-      severity: "HIGH",
-      recommendation:
-        "Players are dying too often. Reduce early difficulty spikes or add assist mechanics.",
-    });
+  const diff = current - previous;
+
+  if (diff < -5) {
+    return {
+      trend: "IMPROVING",
+      insight: "Risk score decreased meaningfully. Iteration working.",
+    };
   }
 
-  if (metrics.early_quit_rate > 0.45) {
-    fixes.push({
-      area: "Retention",
-      severity: "MEDIUM",
-      recommendation:
-        "High early quit detected. Add short-term goals, rewards, or narrative hooks in first sessions.",
-    });
+  if (diff > 5) {
+    return {
+      trend: "DEGRADING",
+      insight: "Risk score increased. Recent changes may be harmful.",
+    };
   }
 
-  if (metrics.sessions_reported < 50) {
-    fixes.push({
-      area: "Test Size",
-      severity: "LOW",
-      recommendation:
-        "Sample size too small. Collect more play sessions before making irreversible decisions.",
-    });
-  }
-
-  if (fixes.length === 0) {
-    fixes.push({
-      area: "Core Loop",
-      severity: "LOW",
-      recommendation:
-        "No critical issues detected. Focus on polishing visuals, pacing, and content depth.",
-    });
-  }
-
-  return fixes;
+  return {
+    trend: "STAGNANT",
+    insight: "No significant movement. Changes not impactful yet.",
+  };
 }
 
 /* ================= ROUTER ================= */
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ================= DECISION API ================= */
+/* ================= DECISION + TREND API ================= */
 v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
     const metrics = {
@@ -174,39 +140,46 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
       deaths_per_session: req.body.deaths_per_session || 0,
       early_quit_rate: req.body.early_quit_rate || 0,
       sessions_reported: req.body.sessions_reported || 0,
+      build_version: req.body.build_version || "unknown",
     };
 
-    const abuse = detectAbuse(metrics);
-    let rawRisk = calculateRiskScore(metrics);
-    let adjustedRisk = rawRisk * abuse.trust_score;
-    let riskPct = Math.round(adjustedRisk * 100);
+    const trust = trustAdjust(metrics);
+    const rawRisk = calculateRiskScore(metrics);
+    const risk = Math.round(rawRisk * trust * 100);
 
     let decision = "ITERATE";
-    if (adjustedRisk < CONFIG.GO) decision = "GO";
-    if (adjustedRisk > CONFIG.KILL) decision = "KILL";
+    if (rawRisk < CONFIG.GO) decision = "GO";
+    if (rawRisk > CONFIG.KILL) decision = "KILL";
 
-    const recommendations = generateRecommendations(metrics);
+    const { data: last } = await supabase
+      .from("decision_logs")
+      .select("risk_score")
+      .eq("game_id", req.game_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const trend = analyzeTrend(risk, last?.risk_score);
 
     await supabase.from("decision_logs").insert({
       game_id: req.game_id,
       studio_id: req.studio_id,
+      build_version: metrics.build_version,
       decision,
-      risk_score: riskPct,
-      trust_score: abuse.trust_score,
-      abuse_flags: abuse.abuse_flags,
-      recommendations,
+      risk_score: risk,
+      trend: trend.trend,
     });
 
     ok(res, {
       decision,
-      risk_score: riskPct,
-      trust_score: abuse.trust_score,
-      recommendations,
+      risk_score: risk,
+      trend: trend.trend,
+      insight: trend.insight,
       version: CONFIG.VERSION,
     });
   } catch (e) {
     console.error(e);
-    fail(res, 500, "Recommendation engine failure");
+    fail(res, 500, "Trend engine failure");
   }
 });
 
@@ -221,7 +194,5 @@ app.get("/health", (_, res) => {
 
 /* ================= START ================= */
 app.listen(CONFIG.PORT, () => {
-  console.log(
-    `LaunchSense backend ${CONFIG.VERSION} running on ${CONFIG.PORT}`
-  );
+  console.log(`LaunchSense ${CONFIG.VERSION} running on ${CONFIG.PORT}`);
 });
