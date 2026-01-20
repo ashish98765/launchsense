@@ -1,6 +1,6 @@
-// LaunchSense Backend — Batch 8
-// Abuse Detection + Trust Scoring Layer
-// Render-ready | Full replace server.js
+// LaunchSense Backend — Batch 9
+// Recommendation Engine Layer
+// Full replace server.js | Render-ready
 
 const express = require("express");
 const cors = require("cors");
@@ -26,7 +26,7 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L8-ABUSE",
+  VERSION: "L9-RECOMMEND",
   GO: 0.35,
   KILL: 0.65,
 };
@@ -43,7 +43,7 @@ const supabase = createClient(
 );
 
 /* ================= TRACE ================= */
-app.use((req, res, next) => {
+app.use((req, _, next) => {
   req.request_id = crypto.randomUUID();
   next();
 });
@@ -88,71 +88,85 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-/* ================= ABUSE DETECTION ================= */
+/* ================= ABUSE CHECK ================= */
 function detectAbuse(metrics) {
-  let flags = [];
   let trust = 1.0;
+  let flags = [];
 
   if (metrics.avg_playtime > 36000) {
-    flags.push("IMPOSSIBLE_PLAYTIME");
     trust -= 0.4;
+    flags.push("IMPOSSIBLE_PLAYTIME");
   }
-
   if (metrics.deaths_per_session > 50) {
-    flags.push("BOT_DEATH_PATTERN");
     trust -= 0.3;
+    flags.push("BOT_PATTERN");
   }
-
   if (metrics.early_quit_rate === 0 || metrics.early_quit_rate === 1) {
-    flags.push("UNNATURAL_QUIT_RATE");
     trust -= 0.2;
-  }
-
-  if (metrics.sessions_reported > 50000) {
-    flags.push("MASS_SYNTHETIC_UPLOAD");
-    trust -= 0.5;
+    flags.push("UNNATURAL_QUIT_RATE");
   }
 
   trust = Math.max(trust, 0.1);
   return { trust_score: trust, abuse_flags: flags };
 }
 
-/* ================= NARRATIVE ENGINE ================= */
-function generateNarrative({ decision, metrics, abuse }) {
-  const lines = [];
-
-  if (abuse.trust_score < 0.6) {
-    lines.push(
-      "Data quality issues detected. Results are partially confidence-weighted."
-    );
-  }
-
-  if (decision === "GO") {
-    lines.push("Core gameplay loop shows healthy engagement.");
-  }
-
-  if (decision === "ITERATE") {
-    lines.push("Game shows promise but requires targeted improvements.");
-  }
-
-  if (decision === "KILL") {
-    lines.push(
-      "Player behavior indicates fundamental engagement breakdown."
-    );
-  }
+/* ================= RECOMMENDATION ENGINE ================= */
+function generateRecommendations(metrics) {
+  const fixes = [];
 
   if (metrics.avg_playtime < 300) {
-    lines.push("Average playtime is too low to sustain long-term retention.");
+    fixes.push({
+      area: "Onboarding",
+      severity: "HIGH",
+      recommendation:
+        "Players are leaving too early. Simplify tutorial, reduce initial friction, and deliver core fun within first 60 seconds.",
+    });
   }
 
-  return lines.join(" ");
+  if (metrics.deaths_per_session > 10) {
+    fixes.push({
+      area: "Difficulty Curve",
+      severity: "HIGH",
+      recommendation:
+        "Players are dying too often. Reduce early difficulty spikes or add assist mechanics.",
+    });
+  }
+
+  if (metrics.early_quit_rate > 0.45) {
+    fixes.push({
+      area: "Retention",
+      severity: "MEDIUM",
+      recommendation:
+        "High early quit detected. Add short-term goals, rewards, or narrative hooks in first sessions.",
+    });
+  }
+
+  if (metrics.sessions_reported < 50) {
+    fixes.push({
+      area: "Test Size",
+      severity: "LOW",
+      recommendation:
+        "Sample size too small. Collect more play sessions before making irreversible decisions.",
+    });
+  }
+
+  if (fixes.length === 0) {
+    fixes.push({
+      area: "Core Loop",
+      severity: "LOW",
+      recommendation:
+        "No critical issues detected. Focus on polishing visuals, pacing, and content depth.",
+    });
+  }
+
+  return fixes;
 }
 
 /* ================= ROUTER ================= */
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ================= DECISION ENDPOINT ================= */
+/* ================= DECISION API ================= */
 v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
     const metrics = {
@@ -163,7 +177,6 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
     };
 
     const abuse = detectAbuse(metrics);
-
     let rawRisk = calculateRiskScore(metrics);
     let adjustedRisk = rawRisk * abuse.trust_score;
     let riskPct = Math.round(adjustedRisk * 100);
@@ -172,11 +185,7 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
     if (adjustedRisk < CONFIG.GO) decision = "GO";
     if (adjustedRisk > CONFIG.KILL) decision = "KILL";
 
-    const narrative = generateNarrative({
-      decision,
-      metrics,
-      abuse,
-    });
+    const recommendations = generateRecommendations(metrics);
 
     await supabase.from("decision_logs").insert({
       game_id: req.game_id,
@@ -185,20 +194,19 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
       risk_score: riskPct,
       trust_score: abuse.trust_score,
       abuse_flags: abuse.abuse_flags,
-      narrative,
+      recommendations,
     });
 
     ok(res, {
       decision,
       risk_score: riskPct,
       trust_score: abuse.trust_score,
-      abuse_flags: abuse.abuse_flags,
-      narrative,
+      recommendations,
       version: CONFIG.VERSION,
     });
   } catch (e) {
     console.error(e);
-    fail(res, 500, "Decision engine failure");
+    fail(res, 500, "Recommendation engine failure");
   }
 });
 
