@@ -1,4 +1,4 @@
-// LaunchSense Backend — Batch 1 (Ingestion Layer)
+// LaunchSense Backend — Batch 2 (Signal Extraction Layer)
 
 const express = require("express");
 const cors = require("cors");
@@ -12,7 +12,7 @@ const { createClient } = require("@supabase/supabase-js");
 const app = express();
 app.disable("x-powered-by");
 
-/* ================= ENV CHECK ================= */
+/* ================= ENV ================= */
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach(k => {
   if (!process.env[k]) {
     console.error("Missing ENV:", k);
@@ -23,7 +23,7 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "1.0-BATCH1"
+  VERSION: "1.1-BATCH2"
 };
 
 /* ================= CORE ================= */
@@ -37,7 +37,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-/* ================= LOGGER ================= */
+/* ================= LOG ================= */
 function log(level, message, meta = {}) {
   console.log(JSON.stringify({
     ts: new Date().toISOString(),
@@ -52,7 +52,7 @@ app.use((req, res, next) => {
   req.request_id = crypto.randomUUID();
   const start = Date.now();
 
-  res.on("finish", ՀՀ () => {
+  res.on("finish", () => {
     log("info", "request_complete", {
       request_id: req.request_id,
       path: req.originalUrl,
@@ -76,9 +76,9 @@ const fail = (res, status, msg) =>
   });
 
 /* ================= RATE LIMIT ================= */
-const ingestLimiter = rateLimit({
+const sdkLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 300,
+  max: 120,
   keyGenerator: req => req.headers["x-api-key"] || req.ip
 });
 
@@ -108,54 +108,76 @@ async function apiAuth(req, res, next) {
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ================= INGEST EVENTS ================= */
-/*
-Payload example:
-{
-  "session_id": "uuid",
-  "events": [
-    { "type": "level_start", "t": 0 },
-    { "type": "death", "level": 1, "t": 32 }
-  ]
-}
-*/
-
+/* ================= SIGNAL EXTRACTION ================= */
 v1.post(
-  "/sdk/events",
-  ingestLimiter,
+  "/sdk/signals",
+  sdkLimiter,
   apiAuth,
   async (req, res) => {
     try {
-      const { session_id, events } = req.body;
+      const { session_id } = req.body;
+      if (!session_id) return fail(res, 400, "session_id required");
 
-      if (!session_id || !Array.isArray(events) || events.length === 0)
-        return fail(res, 400, "Invalid ingestion payload");
+      const { data: events } = await supabase
+        .from("raw_events")
+        .select("event_type, payload")
+        .eq("game_id", req.game_id)
+        .eq("session_id", session_id);
 
-      const rows = events.map(e => ({
-        game_id: req.game_id,
-        session_id,
-        event_type: e.type || "unknown",
-        payload: e,
-        client_ts: e.t ?? null
-      }));
+      if (!events || events.length === 0)
+        return fail(res, 404, "No events found");
+
+      const deaths = events.filter(e => e.event_type === "death").length;
+      const eventsCount = events.length;
+
+      const timestamps = events
+        .map(e => e.payload?.t)
+        .filter(t => typeof t === "number");
+
+      const duration =
+        timestamps.length > 1
+          ? Math.max(...timestamps)
+          : 0;
+
+      const minutes = Math.max(duration / 60, 1);
+
+      const earlyExit = duration < 180;
+      const deathsPerMinute = deaths / minutes;
+
+      const engagementScore = Math.min(
+        1,
+        eventsCount / Math.max(duration, 30)
+      );
 
       const { error } = await supabase
-        .from("raw_events")
-        .insert(rows);
+        .from("session_signals")
+        .upsert({
+          game_id: req.game_id,
+          session_id,
+          session_duration: Math.round(duration),
+          events_count: eventsCount,
+          deaths_count: deaths,
+          deaths_per_minute: deathsPerMinute,
+          early_exit: earlyExit,
+          engagement_score: engagementScore
+        });
 
       if (error) {
-        log("error", "ingest_failed", { error });
-        return fail(res, 500, "Failed to ingest events");
+        log("error", "signal_insert_failed", { error });
+        return fail(res, 500, "Signal computation failed");
       }
 
       ok(res, {
-        ingested: rows.length,
-        session_id
+        session_id,
+        early_exit: earlyExit,
+        deaths,
+        deaths_per_minute: deathsPerMinute,
+        engagement_score: engagementScore
       });
 
     } catch (e) {
-      log("error", "ingest_exception", { error: e.message });
-      fail(res, 500, "Ingestion error");
+      log("error", "signal_exception", { error: e.message });
+      fail(res, 500, "Signal extraction error");
     }
   }
 );
