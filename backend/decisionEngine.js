@@ -1,54 +1,81 @@
-// backend/decisionEngine.js
+// decisionEngine.js
+// Batch 1: Decision Explanation Layer
+// Purpose: Decision ke saath "WHY" + confidence dena
 
-function calculatePlaytimeRisk(playtimeSeconds) {
-  if (playtimeSeconds > 1200) return 0;   // >20 min
-  if (playtimeSeconds > 600) return 10;   // 10–20 min
-  if (playtimeSeconds > 300) return 25;   // 5–10 min
-  return 40;                              // <5 min
-}
+function calculateDecision(metrics) {
+  const {
+    early_quit_rate,
+    avg_session_time,
+    deaths_per_session,
+    restart_rate
+  } = metrics;
 
-function calculateFrustrationRisk(deaths, restarts) {
-  const score = deaths * 3 + restarts * 5;
+  let riskScore = 0;
+  const signals = {};
+  const secondaryReasons = [];
 
-  if (score < 10) return 5;
-  if (score < 20) return 15;
-  return 30;
-}
-
-function calculateRiskScore(metrics) {
-  const { playtime, deaths, restarts, earlyQuit } = metrics;
-
-  let risk = 0;
-
-  // Playtime
-  risk += calculatePlaytimeRisk(playtime);
-
-  // Frustration
-  risk += calculateFrustrationRisk(deaths, restarts);
-
-  // Early quit penalty
-  if (earlyQuit === true) {
-    risk += 25;
+  // --- Early Quit ---
+  if (early_quit_rate > 0.35) {
+    riskScore += 35;
+    signals.early_quit = "critical";
+  } else if (early_quit_rate > 0.2) {
+    riskScore += 20;
+    signals.early_quit = "warning";
+  } else {
+    signals.early_quit = "healthy";
   }
 
-  // Chaos pattern
-  if (playtime < 300 && deaths >= 5 && earlyQuit === true) {
-    risk += 15;
+  // --- Session Length ---
+  if (avg_session_time < 120) {
+    riskScore += 25;
+    signals.session_length = "poor";
+    secondaryReasons.push("Average session time too low");
+  } else {
+    signals.session_length = "ok";
   }
 
-  // Clamp
-  if (risk > 100) risk = 100;
+  // --- Difficulty / Deaths ---
+  if (deaths_per_session > 5) {
+    riskScore += 20;
+    signals.difficulty_spike = "high";
+    secondaryReasons.push("Players dying too frequently");
+  } else {
+    signals.difficulty_spike = "normal";
+  }
 
-  return risk;
+  // --- Restarts ---
+  if (restart_rate > 0.3) {
+    riskScore += 10;
+    secondaryReasons.push("High restart frequency detected");
+  }
+
+  // --- Decision ---
+  let decision = "GO";
+  if (riskScore >= 70) decision = "KILL";
+  else if (riskScore >= 40) decision = "ITERATE";
+
+  // --- Confidence ---
+  const confidence = Math.min(0.95, Math.max(0.55, riskScore / 100 + 0.15));
+
+  // --- Primary Reason ---
+  let primaryReason = "Healthy engagement signals";
+  if (signals.early_quit === "critical")
+    primaryReason = "High early quit rate detected";
+  else if (signals.session_length === "poor")
+    primaryReason = "Players not staying long enough";
+  else if (signals.difficulty_spike === "high")
+    primaryReason = "Difficulty spike causing frustration";
+
+  return {
+    decision,
+    riskScore,
+    confidence: Number(confidence.toFixed(2)),
+    explanation: {
+      primary_reason: primaryReason,
+      secondary_reasons: secondaryReasons,
+      signals
+    }
+  };
 }
 
-function getDecision(riskScore) {
-  if (riskScore < 30) return "GO";
-  if (riskScore < 65) return "ITERATE";
-  return "KILL";
-}
-
-module.exports = {
-  calculateRiskScore,
-  getDecision
-};
+module.exports = { calculateDecision };
