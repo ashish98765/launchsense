@@ -1,5 +1,5 @@
-// LaunchSense Backend — Batch 10
-// Trend & Comparison Engine
+// LaunchSense Backend — Batch 11
+// Kill-Mode Lock + Irreversible Audit Trail
 // FULL REPLACE server.js | Render-ready
 
 const express = require("express");
@@ -26,7 +26,7 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L10-TRENDS",
+  VERSION: "L11-KILL-LOCK",
   GO: 0.35,
   KILL: 0.65,
 };
@@ -88,53 +88,32 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-/* ================= ABUSE ================= */
-function trustAdjust(metrics) {
-  let trust = 1.0;
-  if (metrics.avg_playtime > 36000) trust -= 0.4;
-  if (metrics.deaths_per_session > 50) trust -= 0.3;
-  trust = Math.max(trust, 0.2);
-  return trust;
-}
+/* ================= CHECK KILL LOCK ================= */
+async function isKilled(game_id) {
+  const { data } = await supabase
+    .from("kill_locks")
+    .select("locked_at")
+    .eq("game_id", game_id)
+    .maybeSingle();
 
-/* ================= TREND ANALYSIS ================= */
-function analyzeTrend(current, previous) {
-  if (!previous) {
-    return {
-      trend: "NO_BASELINE",
-      insight: "First build data. No comparison available yet.",
-    };
-  }
-
-  const diff = current - previous;
-
-  if (diff < -5) {
-    return {
-      trend: "IMPROVING",
-      insight: "Risk score decreased meaningfully. Iteration working.",
-    };
-  }
-
-  if (diff > 5) {
-    return {
-      trend: "DEGRADING",
-      insight: "Risk score increased. Recent changes may be harmful.",
-    };
-  }
-
-  return {
-    trend: "STAGNANT",
-    insight: "No significant movement. Changes not impactful yet.",
-  };
+  return !!data;
 }
 
 /* ================= ROUTER ================= */
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ================= DECISION + TREND API ================= */
+/* ================= DECISION API ================= */
 v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
+    if (await isKilled(req.game_id)) {
+      return fail(
+        res,
+        423,
+        "Game is permanently locked (KILL confirmed)."
+      );
+    }
+
     const metrics = {
       avg_playtime: req.body.avg_playtime || 0,
       deaths_per_session: req.body.deaths_per_session || 0,
@@ -143,43 +122,65 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
       build_version: req.body.build_version || "unknown",
     };
 
-    const trust = trustAdjust(metrics);
-    const rawRisk = calculateRiskScore(metrics);
-    const risk = Math.round(rawRisk * trust * 100);
+    const riskRaw = calculateRiskScore(metrics);
+    const risk = Math.round(riskRaw * 100);
 
     let decision = "ITERATE";
-    if (rawRisk < CONFIG.GO) decision = "GO";
-    if (rawRisk > CONFIG.KILL) decision = "KILL";
-
-    const { data: last } = await supabase
-      .from("decision_logs")
-      .select("risk_score")
-      .eq("game_id", req.game_id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    const trend = analyzeTrend(risk, last?.risk_score);
+    if (riskRaw < CONFIG.GO) decision = "GO";
+    if (riskRaw > CONFIG.KILL) decision = "KILL";
 
     await supabase.from("decision_logs").insert({
       game_id: req.game_id,
       studio_id: req.studio_id,
-      build_version: metrics.build_version,
       decision,
       risk_score: risk,
-      trend: trend.trend,
+      build_version: metrics.build_version,
     });
 
     ok(res, {
       decision,
       risk_score: risk,
-      trend: trend.trend,
-      insight: trend.insight,
+      kill_lock_required: decision === "KILL",
       version: CONFIG.VERSION,
     });
   } catch (e) {
     console.error(e);
-    fail(res, 500, "Trend engine failure");
+    fail(res, 500, "Decision engine error");
+  }
+});
+
+/* ================= CONFIRM KILL ================= */
+v1.post("/sdk/confirm-kill", apiAuth, async (req, res) => {
+  try {
+    if (await isKilled(req.game_id)) {
+      return fail(res, 409, "Game already permanently killed.");
+    }
+
+    const reason = req.body.reason || "No reason provided";
+
+    await supabase.from("kill_locks").insert({
+      game_id: req.game_id,
+      studio_id: req.studio_id,
+      reason,
+      locked_at: new Date().toISOString(),
+    });
+
+    await supabase.from("audit_logs").insert({
+      game_id: req.game_id,
+      studio_id: req.studio_id,
+      action: "KILL_CONFIRMED",
+      meta: { reason },
+    });
+
+    ok(res, {
+      status: "LOCKED",
+      message:
+        "Game permanently locked. No further decisions or data accepted.",
+      version: CONFIG.VERSION,
+    });
+  } catch (e) {
+    console.error(e);
+    fail(res, 500, "Kill lock failed");
   }
 });
 
