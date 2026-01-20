@@ -1,5 +1,4 @@
-// LaunchSense Backend — Layer 5 / Batch 5
-// Aggregation + History APIs
+// LaunchSense Backend — Batch 1 (Ingestion Layer)
 
 const express = require("express");
 const cors = require("cors");
@@ -9,68 +8,63 @@ const crypto = require("crypto");
 require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
-const { calculateRiskScore } = require("./decisionEngine");
 
 const app = express();
 app.disable("x-powered-by");
 
-/* ===================== ENV CHECK ===================== */
-["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach((k) => {
+/* ================= ENV CHECK ================= */
+["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach(k => {
   if (!process.env[k]) {
     console.error("Missing ENV:", k);
     process.exit(1);
   }
 });
 
-/* ===================== CONFIG ===================== */
+/* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L5-B5",
-  BASE_GO: 0.35,
-  BASE_KILL: 0.65,
+  VERSION: "1.0-BATCH1"
 };
 
-/* ===================== CORE ===================== */
+/* ================= CORE ================= */
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: "300kb" }));
 
-/* ===================== SUPABASE ===================== */
+/* ================= SUPABASE ================= */
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-/* ===================== LOGGER ===================== */
+/* ================= LOGGER ================= */
 function log(level, message, meta = {}) {
-  console.log(
-    JSON.stringify({
-      ts: new Date().toISOString(),
-      level,
-      message,
-      ...meta,
-    })
-  );
+  console.log(JSON.stringify({
+    ts: new Date().toISOString(),
+    level,
+    message,
+    ...meta
+  }));
 }
 
-/* ===================== TRACE ===================== */
+/* ================= TRACE ================= */
 app.use((req, res, next) => {
   req.request_id = crypto.randomUUID();
-  req._start = Date.now();
+  const start = Date.now();
 
-  res.on("finish", () => {
+  res.on("finish", ՀՀ () => {
     log("info", "request_complete", {
       request_id: req.request_id,
       path: req.originalUrl,
       status: res.statusCode,
-      duration_ms: Date.now() - req._start,
+      duration_ms: Date.now() - start
     });
   });
 
   next();
 });
 
-/* ===================== HELPERS ===================== */
+/* ================= HELPERS ================= */
 const ok = (res, data) =>
   res.json({ success: true, request_id: res.req.request_id, data });
 
@@ -78,17 +72,17 @@ const fail = (res, status, msg) =>
   res.status(status).json({
     success: false,
     request_id: res.req.request_id,
-    error: msg,
+    error: msg
   });
 
-/* ===================== RATE LIMIT ===================== */
-const sdkLimiter = rateLimit({
+/* ================= RATE LIMIT ================= */
+const ingestLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 60,
-  keyGenerator: (req) => req.headers["x-api-key"] || req.ip,
+  max: 300,
+  keyGenerator: req => req.headers["x-api-key"] || req.ip
 });
 
-/* ===================== AUTH ===================== */
+/* ================= AUTH ================= */
 async function apiAuth(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   const gameId = req.headers["x-game-id"];
@@ -110,104 +104,75 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-/* ===================== ROUTER ===================== */
+/* ================= ROUTER ================= */
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ===================== PERSONA ===================== */
-function personaView(decision, risk) {
-  return {
-    founder: `Risk ${Math.round(risk * 100)}%`,
-    designer: decision === "GO" ? "Healthy loop" : "Friction detected",
-    investor:
-      risk < 0.4
-        ? "Low risk"
-        : risk > 0.6
-        ? "High risk"
-        : "Moderate risk",
-  };
+/* ================= INGEST EVENTS ================= */
+/*
+Payload example:
+{
+  "session_id": "uuid",
+  "events": [
+    { "type": "level_start", "t": 0 },
+    { "type": "death", "level": 1, "t": 32 }
+  ]
 }
+*/
 
-/* ===================== DECISION ===================== */
 v1.post(
-  "/sdk/decision",
-  sdkLimiter,
+  "/sdk/events",
+  ingestLimiter,
   apiAuth,
   async (req, res) => {
     try {
-      const risk = calculateRiskScore(req.body);
+      const { session_id, events } = req.body;
 
-      let decision = "ITERATE";
-      if (risk < CONFIG.BASE_GO) decision = "GO";
-      if (risk > CONFIG.BASE_KILL) decision = "KILL";
+      if (!session_id || !Array.isArray(events) || events.length === 0)
+        return fail(res, 400, "Invalid ingestion payload");
 
-      await supabase.from("decision_logs").insert({
+      const rows = events.map(e => ({
         game_id: req.game_id,
-        decision,
-        risk_score: Math.round(risk * 100),
-        sessions_count: req.body.sessions?.length || 0,
-        events_count: req.body.events?.length || 0,
-      });
+        session_id,
+        event_type: e.type || "unknown",
+        payload: e,
+        client_ts: e.t ?? null
+      }));
+
+      const { error } = await supabase
+        .from("raw_events")
+        .insert(rows);
+
+      if (error) {
+        log("error", "ingest_failed", { error });
+        return fail(res, 500, "Failed to ingest events");
+      }
 
       ok(res, {
-        decision,
-        risk_score: Math.round(risk * 100),
-        personas: personaView(decision, risk),
-        version: CONFIG.VERSION,
+        ingested: rows.length,
+        session_id
       });
-    } catch {
-      fail(res, 500, "Decision failed");
+
+    } catch (e) {
+      log("error", "ingest_exception", { error: e.message });
+      fail(res, 500, "Ingestion error");
     }
   }
 );
 
-/* ===================== HISTORY ===================== */
-v1.get("/history", apiAuth, async (req, res) => {
-  const { data } = await supabase
-    .from("decision_logs")
-    .select("decision,risk_score,created_at")
-    .eq("game_id", req.game_id)
-    .order("created_at", { ascending: false })
-    .limit(20);
-
-  ok(res, data || []);
-});
-
-/* ===================== SUMMARY ===================== */
-v1.get("/summary", apiAuth, async (req, res) => {
-  const { data } = await supabase
-    .from("decision_logs")
-    .select("risk_score, decision")
-    .eq("game_id", req.game_id);
-
-  if (!data || data.length === 0)
-    return ok(res, { message: "No data yet" });
-
-  const avgRisk =
-    data.reduce((a, b) => a + b.risk_score, 0) / data.length;
-
-  const last = data[data.length - 1];
-
-  ok(res, {
-    avg_risk: Math.round(avgRisk),
-    last_decision: last.decision,
-    samples: data.length,
-  });
-});
-
-/* ===================== HEALTH ===================== */
+/* ================= HEALTH ================= */
 app.get("/health", (_, res) =>
   res.json({
     status: "ok",
     version: CONFIG.VERSION,
-    time: new Date().toISOString(),
+    time: new Date().toISOString()
   })
 );
 
-/* ===================== START ===================== */
-app.listen(CONFIG.PORT, () =>
+/* ================= START ================= */
+app.listen(CONFIG.PORT, () => {
   log("info", "server_started", {
     version: CONFIG.VERSION,
-    port: CONFIG.PORT,
-  })
-);
+    port: CONFIG.PORT
+  });
+});
