@@ -1,6 +1,7 @@
 /**
- * LaunchSense Backend – Stable L5 + Recommendations
- * CommonJS | Render-ready | Supabase
+ * LaunchSense Backend — Stable SaaS Build
+ * Layers: Auth, Decision, Trend, Confidence, History
+ * Runtime: Node.js (CommonJS) — Render compatible
  */
 
 const express = require("express");
@@ -12,8 +13,8 @@ require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
 const { calculateRiskScore } = require("./decisionEngine");
-const { extractInsights } = require("./insightEngine");
-const { generateRecommendations } = require("./recommendationEngine");
+const { analyzeTrend } = require("./trendEngine");
+const { calculateConfidence } = require("./confidenceEngine");
 
 const app = express();
 app.disable("x-powered-by");
@@ -34,7 +35,7 @@ const CONFIG = {
   BASE_KILL: 0.65,
 };
 
-/* ================= CORE ================= */
+/* ================= CORE MIDDLEWARE ================= */
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: "300kb" }));
@@ -55,7 +56,6 @@ app.use((req, res, next) => {
       JSON.stringify({
         ts: new Date().toISOString(),
         request_id: req.request_id,
-        method: req.method,
         path: req.originalUrl,
         status: res.statusCode,
         duration_ms: Date.now() - start,
@@ -116,7 +116,11 @@ function personaView(decision, risk) {
     founder: `Risk ${Math.round(risk * 100)}%`,
     designer: decision === "GO" ? "Healthy loop" : "Friction detected",
     investor:
-      risk < 0.4 ? "Low risk" : risk > 0.6 ? "High risk" : "Moderate risk",
+      risk < 0.4
+        ? "Low risk"
+        : risk > 0.6
+        ? "High risk"
+        : "Moderate risk",
   };
 }
 
@@ -133,14 +137,7 @@ v1.post(
       if (risk < CONFIG.BASE_GO) decision = "GO";
       if (risk > CONFIG.BASE_KILL) decision = "KILL";
 
-      const insights = extractInsights(req.body);
-
-      const recommendations = generateRecommendations({
-        decision,
-        risk_score: Math.round(risk * 100),
-        insights,
-      });
-
+      // store decision
       await supabase.from("decision_logs").insert({
         game_id: req.game_id,
         decision,
@@ -149,12 +146,26 @@ v1.post(
         events_count: req.body.events?.length || 0,
       });
 
+      // fetch recent history
+      const { data: history } = await supabase
+        .from("decision_logs")
+        .select("risk_score")
+        .eq("game_id", req.game_id)
+        .order("created_at", { ascending: true })
+        .limit(10);
+
+      const trendResult = analyzeTrend(history || []);
+      const confidence = calculateConfidence(
+        history ? history.length : 0,
+        trendResult.trend
+      );
+
       ok(res, {
         decision,
         risk_score: Math.round(risk * 100),
         personas: personaView(decision, risk),
-        insights,
-        recommendations,
+        trend: trendResult.trend,
+        confidence,
         version: CONFIG.VERSION,
       });
     } catch (e) {
@@ -191,23 +202,23 @@ v1.get("/summary", apiAuth, async (req, res) => {
 
   ok(res, {
     avg_risk: Math.round(avgRisk),
-    last_decision: data[data.length - 1].decision,
     samples: data.length,
+    last_decision: data[data.length - 1].decision,
   });
 });
 
 /* ================= HEALTH ================= */
-app.get("/health", (_, res) =>
+app.get("/health", (_, res) => {
   res.json({
     status: "ok",
     version: CONFIG.VERSION,
     time: new Date().toISOString(),
-  })
-);
+  });
+});
 
 /* ================= START ================= */
 app.listen(CONFIG.PORT, () => {
   console.log(
-    `LaunchSense backend running on ${CONFIG.PORT} (${CONFIG.VERSION})`
+    `LaunchSense backend running | version=${CONFIG.VERSION} | port=${CONFIG.PORT}`
   );
 });
