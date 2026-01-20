@@ -15,137 +15,125 @@ const supabase = createClient(
 );
 
 /* ===============================
-   ANALYSIS ENGINE
+   CORE ANALYSIS
 ================================*/
-function analyzeGameplay(metrics) {
-  let funRisk = 0;
-  let retentionRisk = 0;
-  let difficultyRisk = 0;
+function analyzeGameplay(m) {
+  let fun = 0, retention = 0, difficulty = 0;
   const signals = [];
 
-  if (metrics.avg_playtime < 8) {
-    retentionRisk += 30;
-    signals.push("Low average playtime");
+  if (m.avg_playtime < 8) {
+    retention += 30; signals.push("Low playtime");
+  }
+  if (m.early_quit_rate > 0.4) {
+    retention += 25; signals.push("High early quit");
+  }
+  if (m.avg_deaths > 5) {
+    difficulty += 25; signals.push("Difficulty spike");
+  }
+  if (m.restart_rate > 0.35) {
+    fun += 20; signals.push("Frustration detected");
   }
 
-  if (metrics.early_quit_rate > 0.4) {
-    retentionRisk += 25;
-    signals.push("High early quit rate");
-  }
-
-  if (metrics.avg_deaths > 5) {
-    difficultyRisk += 25;
-    signals.push("Difficulty spike");
-  }
-
-  if (metrics.restart_rate > 0.35) {
-    funRisk += 20;
-    signals.push("Player frustration detected");
-  }
-
-  const risk = Math.min(funRisk + retentionRisk + difficultyRisk, 100);
+  const risk = Math.min(fun + retention + difficulty, 100);
 
   let decision = "GO";
-  if (risk >= 40 && risk < 70) decision = "ITERATE";
+  if (risk >= 40) decision = "ITERATE";
   if (risk >= 70) decision = "KILL";
 
-  const primaryRisk =
-    retentionRisk >= funRisk && retentionRisk >= difficultyRisk
+  const primary =
+    retention >= difficulty && retention >= fun
       ? "retention"
-      : difficultyRisk >= funRisk
+      : difficulty >= fun
       ? "difficulty"
       : "fun";
 
-  return { risk, decision, primaryRisk, signals };
+  return { risk, decision, primary, signals };
 }
 
 /* ===============================
    CONFIDENCE
 ================================*/
-function calculateConfidence(metrics) {
-  const p = Math.min(metrics.unique_players / 50, 1);
-  const s = Math.min(metrics.total_sessions / 100, 1);
-  return Number(((p + s) / 2).toFixed(2));
+function confidence(m) {
+  return Number(
+    Math.min(
+      (m.unique_players / 50 + m.total_sessions / 100) / 2,
+      1
+    ).toFixed(2)
+  );
+}
+
+/* ===============================
+   TREND
+================================*/
+function trend(current, previous) {
+  if (previous === null) return { direction: "none", delta: 0 };
+  const delta = previous - current;
+
+  if (delta >= 10) return { direction: "strong_improvement", delta };
+  if (delta >= 3) return { direction: "mild_improvement", delta };
+  if (delta <= -3) return { direction: "degrading", delta };
+  return { direction: "stagnant", delta };
+}
+
+/* ===============================
+   PREDICTION (NEW)
+================================*/
+function predict(risk, trendDir) {
+  let next1 = risk;
+  let next2 = risk;
+
+  if (trendDir === "degrading") {
+    next1 += 8;
+    next2 += 15;
+  }
+  if (trendDir.includes("improvement")) {
+    next1 -= 6;
+    next2 -= 12;
+  }
+
+  return {
+    next_iteration: Math.min(next1, 100),
+    two_iterations: Math.min(next2, 100),
+  };
+}
+
+/* ===============================
+   KILL WARNING
+================================*/
+function killWarning(risk, prediction) {
+  if (risk >= 70) return "KILL_LOCK";
+  if (prediction.next_iteration >= 70) return "FINAL_WARNING";
+  if (prediction.next_iteration >= 60) return "WARNING";
+  return "NONE";
 }
 
 /* ===============================
    SUGGESTIONS
 ================================*/
-function generateSuggestions(primaryRisk, decision) {
+function suggestions(primary, warning) {
   const s = [];
 
-  if (primaryRisk === "retention")
-    s.push(
-      "Improve onboarding clarity",
-      "Shorten first-session duration",
-      "Add early progression reward"
-    );
+  if (primary === "retention")
+    s.push("Improve onboarding", "Shorten early loop");
+  if (primary === "difficulty")
+    s.push("Reduce early difficulty", "Add checkpoints");
+  if (primary === "fun")
+    s.push("Improve feedback", "Reduce friction");
 
-  if (primaryRisk === "difficulty")
-    s.push(
-      "Flatten early difficulty curve",
-      "Add checkpoints",
-      "Reduce early enemy damage"
-    );
-
-  if (primaryRisk === "fun")
-    s.push(
-      "Improve feedback (VFX/SFX)",
-      "Strengthen core loop",
-      "Reduce gameplay friction"
-    );
-
-  if (decision === "GO")
-    s.unshift(
-      "Scale playtest to 50–100 users",
-      "Track D1/D3 retention"
-    );
-
-  if (decision === "KILL")
-    s.push(
-      "Stop further investment",
-      "Salvage mechanics",
-      "Document learnings"
-    );
+  if (warning === "FINAL_WARNING")
+    s.unshift("⚠️ Last safe iteration remaining");
 
   return s;
 }
 
 /* ===============================
-   TREND ENGINE (NEW)
-================================*/
-function analyzeTrend(currentRisk, previousRisk) {
-  if (previousRisk === null) {
-    return { direction: "no_history", delta: 0 };
-  }
-
-  const delta = previousRisk - currentRisk;
-
-  let direction = "stagnant";
-  if (delta >= 10) direction = "strong_improvement";
-  else if (delta >= 3) direction = "mild_improvement";
-  else if (delta <= -3) direction = "degrading";
-
-  return { direction, delta };
-}
-
-/* ===============================
-   BENCHMARK (SOFT)
-================================*/
-function benchmarkBand(risk) {
-  if (risk < 30) return "top_tier";
-  if (risk < 55) return "average";
-  return "high_risk";
-}
-
-/* ===============================
-   ANALYZE API
+   ANALYZE ENDPOINT
 ================================*/
 app.post("/analyze", async (req, res) => {
   const { game_id } = req.body;
   if (!game_id) return res.status(400).json({ error: "game_id required" });
 
-  const { data: lastDecision } = await supabase
+  const { data: last } = await supabase
     .from("decisions")
     .select("*")
     .eq("game_id", game_id)
@@ -153,18 +141,16 @@ app.post("/analyze", async (req, res) => {
     .limit(1)
     .single();
 
-  if (lastDecision?.locked) {
+  if (last?.locked)
     return res.status(403).json({ error: "Game permanently killed" });
-  }
 
   const { data } = await supabase
     .from("gameplay_metrics")
     .select("*")
     .eq("game_id", game_id);
 
-  if (!data || data.length === 0) {
+  if (!data?.length)
     return res.status(404).json({ error: "No gameplay data" });
-  }
 
   const total_sessions = data.length;
   const unique_players = new Set(data.map(d => d.player_id)).size;
@@ -178,41 +164,36 @@ app.post("/analyze", async (req, res) => {
     unique_players,
   };
 
-  const analysis = analyzeGameplay(metrics);
-  const confidence = calculateConfidence(metrics);
-  const suggestions = generateSuggestions(
-    analysis.primaryRisk,
-    analysis.decision
-  );
+  const a = analyzeGameplay(metrics);
+  const c = confidence(metrics);
+  const t = trend(a.risk, last?.risk_score ?? null);
+  const p = predict(a.risk, t.direction);
+  const w = killWarning(a.risk, p);
 
-  const trend = analyzeTrend(
-    analysis.risk,
-    lastDecision?.risk_score ?? null
-  );
-
-  const benchmark = benchmarkBand(analysis.risk);
-  const locked = analysis.decision === "KILL";
+  const locked = a.decision === "KILL";
 
   await supabase.from("decisions").insert({
     game_id,
-    risk_score: analysis.risk,
-    decision: analysis.decision,
-    confidence,
+    risk_score: a.risk,
+    decision: a.decision,
+    confidence: c,
     locked,
   });
 
   res.json({
     game_id,
-    risk_score: analysis.risk,
-    decision: analysis.decision,
-    confidence,
-    trend,
-    benchmark,
+    risk_score: a.risk,
+    decision: a.decision,
+    confidence: c,
+    trend: t,
+    prediction: p,
+    kill_warning: w,
     explanation: {
-      primary_risk: analysis.primaryRisk,
-      signals: analysis.signals,
+      primary_risk: a.primary,
+      signals: a.signals,
     },
-    suggestions,
+    suggestions: suggestions(a.primary, w),
+    executive_summary: `Current risk is ${a.risk}. Trend is ${t.direction}. If no major fixes are applied, risk may reach ${p.next_iteration} in next iteration.`,
     locked,
   });
 });
@@ -221,10 +202,10 @@ app.post("/analyze", async (req, res) => {
    HEALTH
 ================================*/
 app.get("/", (_, res) => {
-  res.send("LaunchSense Backend v4 running");
+  res.send("LaunchSense Backend v5 — Predictive System Live");
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("LaunchSense backend live on port", PORT);
-});
+app.listen(PORT, () =>
+  console.log("LaunchSense backend running on", PORT)
+);
