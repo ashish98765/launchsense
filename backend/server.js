@@ -1,5 +1,5 @@
-// LaunchSense Backend — Layer 4 / Batch 4
-// Persistence + Decision Memory
+// LaunchSense Backend — Layer 5 / Batch 5
+// Aggregation + History APIs
 
 const express = require("express");
 const cors = require("cors");
@@ -25,7 +25,7 @@ app.disable("x-powered-by");
 /* ===================== CONFIG ===================== */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L4-B4",
+  VERSION: "L5-B5",
   BASE_GO: 0.35,
   BASE_KILL: 0.65,
 };
@@ -53,7 +53,7 @@ function log(level, message, meta = {}) {
   );
 }
 
-/* ===================== REQUEST TRACE ===================== */
+/* ===================== TRACE ===================== */
 app.use((req, res, next) => {
   req.request_id = crypto.randomUUID();
   req._start = Date.now();
@@ -61,7 +61,6 @@ app.use((req, res, next) => {
   res.on("finish", () => {
     log("info", "request_complete", {
       request_id: req.request_id,
-      method: req.method,
       path: req.originalUrl,
       status: res.statusCode,
       duration_ms: Date.now() - req._start,
@@ -75,64 +74,39 @@ app.use((req, res, next) => {
 const ok = (res, data) =>
   res.json({ success: true, request_id: res.req.request_id, data });
 
-const fail = (res, status, msg) => {
-  log("warn", "request_failed", {
-    request_id: res.req.request_id,
-    status,
-    error: msg,
-  });
+const fail = (res, status, msg) =>
   res.status(status).json({
     success: false,
     request_id: res.req.request_id,
     error: msg,
   });
-};
 
 /* ===================== RATE LIMIT ===================== */
 const sdkLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
   keyGenerator: (req) => req.headers["x-api-key"] || req.ip,
-  handler: (_, res) => fail(res, 429, "Rate limit exceeded"),
 });
 
 /* ===================== AUTH ===================== */
 async function apiAuth(req, res, next) {
-  try {
-    const apiKey = req.headers["x-api-key"];
-    const gameId = req.headers["x-game-id"];
+  const apiKey = req.headers["x-api-key"];
+  const gameId = req.headers["x-game-id"];
 
-    if (!apiKey || !gameId)
-      return fail(res, 401, "Missing API credentials");
+  if (!apiKey || !gameId)
+    return fail(res, 401, "Missing API credentials");
 
-    const { data } = await supabase
-      .from("api_keys")
-      .select("id, revoked")
-      .eq("api_key", apiKey)
-      .eq("game_id", gameId)
-      .maybeSingle();
+  const { data } = await supabase
+    .from("api_keys")
+    .select("id")
+    .eq("api_key", apiKey)
+    .eq("game_id", gameId)
+    .eq("revoked", false)
+    .maybeSingle();
 
-    if (!data) return fail(res, 401, "Invalid API key");
-    if (data.revoked) return fail(res, 403, "API key revoked");
+  if (!data) return fail(res, 401, "Invalid API key");
 
-    req.game_id = gameId;
-    next();
-  } catch (e) {
-    log("error", "auth_error", { error: e.message });
-    fail(res, 500, "Auth failure");
-  }
-}
-
-/* ===================== VALIDATION ===================== */
-function validateDecisionPayload(req, res, next) {
-  const { sessions, events } = req.body || {};
-
-  if (!Array.isArray(sessions) || sessions.length === 0)
-    return fail(res, 400, "Invalid sessions");
-
-  if (!Array.isArray(events))
-    return fail(res, 400, "Invalid events");
-
+  req.game_id = gameId;
   next();
 }
 
@@ -140,12 +114,11 @@ function validateDecisionPayload(req, res, next) {
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ===================== HELPERS ===================== */
+/* ===================== PERSONA ===================== */
 function personaView(decision, risk) {
   return {
     founder: `Risk ${Math.round(risk * 100)}%`,
-    designer:
-      decision === "GO" ? "Engagement healthy" : "Friction detected",
+    designer: decision === "GO" ? "Healthy loop" : "Friction detected",
     investor:
       risk < 0.4
         ? "Low risk"
@@ -160,7 +133,6 @@ v1.post(
   "/sdk/decision",
   sdkLimiter,
   apiAuth,
-  validateDecisionPayload,
   async (req, res) => {
     try {
       const risk = calculateRiskScore(req.body);
@@ -169,19 +141,12 @@ v1.post(
       if (risk < CONFIG.BASE_GO) decision = "GO";
       if (risk > CONFIG.BASE_KILL) decision = "KILL";
 
-      // 🔥 SAVE TO DATABASE
       await supabase.from("decision_logs").insert({
         game_id: req.game_id,
         decision,
         risk_score: Math.round(risk * 100),
-        sessions_count: req.body.sessions.length,
-        events_count: req.body.events.length,
-      });
-
-      log("info", "decision_saved", {
-        game_id: req.game_id,
-        decision,
-        risk,
+        sessions_count: req.body.sessions?.length || 0,
+        events_count: req.body.events?.length || 0,
       });
 
       ok(res, {
@@ -190,12 +155,45 @@ v1.post(
         personas: personaView(decision, risk),
         version: CONFIG.VERSION,
       });
-    } catch (e) {
-      log("error", "decision_error", { error: e.message });
+    } catch {
       fail(res, 500, "Decision failed");
     }
   }
 );
+
+/* ===================== HISTORY ===================== */
+v1.get("/history", apiAuth, async (req, res) => {
+  const { data } = await supabase
+    .from("decision_logs")
+    .select("decision,risk_score,created_at")
+    .eq("game_id", req.game_id)
+    .order("created_at", { ascending: false })
+    .limit(20);
+
+  ok(res, data || []);
+});
+
+/* ===================== SUMMARY ===================== */
+v1.get("/summary", apiAuth, async (req, res) => {
+  const { data } = await supabase
+    .from("decision_logs")
+    .select("risk_score, decision")
+    .eq("game_id", req.game_id);
+
+  if (!data || data.length === 0)
+    return ok(res, { message: "No data yet" });
+
+  const avgRisk =
+    data.reduce((a, b) => a + b.risk_score, 0) / data.length;
+
+  const last = data[data.length - 1];
+
+  ok(res, {
+    avg_risk: Math.round(avgRisk),
+    last_decision: last.decision,
+    samples: data.length,
+  });
+});
 
 /* ===================== HEALTH ===================== */
 app.get("/health", (_, res) =>
@@ -207,9 +205,9 @@ app.get("/health", (_, res) =>
 );
 
 /* ===================== START ===================== */
-app.listen(CONFIG.PORT, () => {
+app.listen(CONFIG.PORT, () =>
   log("info", "server_started", {
     version: CONFIG.VERSION,
     port: CONFIG.PORT,
-  });
-});
+  })
+);
