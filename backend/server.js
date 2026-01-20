@@ -1,238 +1,181 @@
-// LaunchSense Backend — Batch 5 (Persona APIs)
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import { createClient } from "@supabase/supabase-js";
 
-const express = require("express");
-const cors = require("cors");
-const helmet = require("helmet");
-const rateLimit = require("express-rate-limit");
-const crypto = require("crypto");
-require("dotenv").config();
-
-const { createClient } = require("@supabase/supabase-js");
+dotenv.config();
 
 const app = express();
-app.disable("x-powered-by");
-
-/* ================= ENV ================= */
-["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach(k => {
-  if (!process.env[k]) {
-    console.error("Missing ENV:", k);
-    process.exit(1);
-  }
-});
-
-/* ================= CONFIG ================= */
-const CONFIG = {
-  PORT: process.env.PORT || 3000,
-  VERSION: "1.4-BATCH5"
-};
-
-/* ================= CORE ================= */
-app.use(helmet());
 app.use(cors());
-app.use(express.json({ limit: "300kb" }));
+app.use(express.json());
 
-/* ================= SUPABASE ================= */
+// --------------------
+// Supabase Setup
+// --------------------
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-/* ================= LOG ================= */
-function log(level, message, meta = {}) {
-  console.log(JSON.stringify({
-    ts: new Date().toISOString(),
-    level,
-    message,
-    ...meta
-  }));
-}
+// --------------------
+// Utility: Risk Analysis
+// --------------------
+function analyzeGameplay(metrics) {
+  const signals = [];
 
-/* ================= TRACE ================= */
-app.use((req, res, next) => {
-  req.request_id = crypto.randomUUID();
-  const start = Date.now();
+  let risk = 0;
+  let funRisk = 0;
+  let retentionRisk = 0;
+  let difficultyRisk = 0;
 
-  res.on("finish", () => {
-    log("info", "request_complete", {
-      request_id: req.request_id,
-      path: req.originalUrl,
-      status: res.statusCode,
-      duration_ms: Date.now() - start
-    });
-  });
-
-  next();
-});
-
-/* ================= HELPERS ================= */
-const ok = (res, data) =>
-  res.json({ success: true, request_id: res.req.request_id, data });
-
-const fail = (res, status, msg) =>
-  res.status(status).json({
-    success: false,
-    request_id: res.req.request_id,
-    error: msg
-  });
-
-/* ================= RATE LIMIT ================= */
-const readLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 120,
-  keyGenerator: req => req.headers["x-api-key"] || req.ip
-});
-
-/* ================= AUTH ================= */
-async function apiAuth(req, res, next) {
-  const apiKey = req.headers["x-api-key"];
-  const gameId = req.headers["x-game-id"];
-
-  if (!apiKey || !gameId)
-    return fail(res, 401, "Missing API credentials");
-
-  const { data } = await supabase
-    .from("api_keys")
-    .select("id")
-    .eq("api_key", apiKey)
-    .eq("game_id", gameId)
-    .eq("revoked", false)
-    .maybeSingle();
-
-  if (!data) return fail(res, 401, "Invalid API key");
-
-  req.game_id = gameId;
-  next();
-}
-
-/* ================= ROUTER ================= */
-const v1 = express.Router();
-app.use("/v1", v1);
-
-/* ================= PERSONA: FOUNDER ================= */
-v1.get(
-  "/persona/founder",
-  readLimiter,
-  apiAuth,
-  async (req, res) => {
-    const { data } = await supabase
-      .from("risk_decisions")
-      .select("risk_score, decision")
-      .eq("game_id", req.game_id);
-
-    if (!data || data.length === 0)
-      return ok(res, { message: "No data yet" });
-
-    let go = 0, iterate = 0, kill = 0;
-    let avgRisk = 0;
-
-    data.forEach(d => {
-      avgRisk += d.risk_score;
-      if (d.decision === "GO") go++;
-      if (d.decision === "ITERATE") iterate++;
-      if (d.decision === "KILL") kill++;
-    });
-
-    avgRisk /= data.length;
-
-    ok(res, {
-      sessions: data.length,
-      avg_risk: Number(avgRisk.toFixed(2)),
-      decision_bias: { go, iterate, kill },
-      verdict:
-        avgRisk < 0.4
-          ? "Healthy trajectory"
-          : avgRisk > 0.65
-          ? "High risk — reconsider investment"
-          : "Needs iteration"
-    });
+  if (metrics.avg_playtime < 8) {
+    retentionRisk += 30;
+    signals.push("Players are quitting too early in the session");
   }
-);
 
-/* ================= PERSONA: DESIGNER ================= */
-v1.get(
-  "/persona/designer",
-  readLimiter,
-  apiAuth,
-  async (req, res) => {
-    const { data } = await supabase
-      .from("session_signals")
+  if (metrics.early_quit_rate > 0.4) {
+    retentionRisk += 25;
+    signals.push("High early quit rate detected");
+  }
+
+  if (metrics.avg_deaths > 5) {
+    difficultyRisk += 25;
+    signals.push("Difficulty spike detected due to high deaths");
+  }
+
+  if (metrics.restart_rate > 0.35) {
+    funRisk += 20;
+    signals.push("Restart rate indicates player frustration");
+  }
+
+  risk = Math.min(funRisk + retentionRisk + difficultyRisk, 100);
+
+  let decision = "GO";
+  if (risk >= 40 && risk < 70) decision = "ITERATE";
+  if (risk >= 70) decision = "KILL";
+
+  let primaryRisk = "fun";
+  if (retentionRisk >= funRisk && retentionRisk >= difficultyRisk)
+    primaryRisk = "retention";
+  else if (difficultyRisk >= funRisk)
+    primaryRisk = "difficulty";
+
+  let secondaryRisk =
+    primaryRisk === "fun"
+      ? "retention"
+      : primaryRisk === "retention"
+      ? "difficulty"
+      : "fun";
+
+  return {
+    risk,
+    decision,
+    primaryRisk,
+    secondaryRisk,
+    signals,
+  };
+}
+
+// --------------------
+// Utility: Confidence Score
+// --------------------
+function calculateConfidence(metrics) {
+  let playerScore = Math.min(metrics.unique_players / 50, 1);
+  let sessionScore = Math.min(metrics.total_sessions / 100, 1);
+  let stabilityScore =
+    metrics.avg_playtime > 0 && metrics.playtime_variance < 15 ? 1 : 0.6;
+
+  const confidence = (
+    (playerScore + sessionScore + stabilityScore) /
+    3
+  ).toFixed(2);
+
+  return Number(confidence);
+}
+
+// --------------------
+// API: Analyze Game
+// --------------------
+app.post("/analyze", async (req, res) => {
+  try {
+    const { game_id } = req.body;
+
+    if (!game_id) {
+      return res.status(400).json({ error: "game_id is required" });
+    }
+
+    const { data, error } = await supabase
+      .from("gameplay_metrics")
       .select("*")
-      .eq("game_id", req.game_id);
+      .eq("game_id", game_id);
 
-    if (!data || data.length === 0)
-      return ok(res, { message: "No data yet" });
+    if (error || !data || data.length === 0) {
+      return res.status(404).json({ error: "No gameplay data found" });
+    }
 
-    const friction = data.filter(s => s.early_exit).length;
-    const avgDeaths =
-      data.reduce((a, b) => a + (b.deaths_per_minute || 0), 0) /
-      data.length;
+    // Aggregate metrics
+    const total_sessions = data.length;
+    const unique_players = new Set(data.map(d => d.player_id)).size;
 
-    const avgEngagement =
-      data.reduce((a, b) => a + (b.engagement_score || 0), 0) /
-      data.length;
+    const avg_playtime =
+      data.reduce((a, b) => a + b.playtime, 0) / total_sessions;
 
-    ok(res, {
-      sessions: data.length,
-      early_exit_sessions: friction,
-      avg_deaths_per_minute: Number(avgDeaths.toFixed(2)),
-      avg_engagement: Number(avgEngagement.toFixed(2)),
-      focus_hint:
-        friction / data.length > 0.4
-          ? "Players quitting early — tutorial or difficulty issue"
-          : "Core loop mostly engaging"
-    });
+    const avg_deaths =
+      data.reduce((a, b) => a + b.deaths, 0) / total_sessions;
+
+    const restart_rate =
+      data.filter(d => d.restarts > 0).length / total_sessions;
+
+    const early_quit_rate =
+      data.filter(d => d.early_quit === true).length / total_sessions;
+
+    const playtimes = data.map(d => d.playtime);
+    const mean = avg_playtime;
+    const variance =
+      playtimes.reduce((a, b) => a + Math.pow(b - mean, 2), 0) /
+      playtimes.length;
+
+    const metrics = {
+      avg_playtime,
+      avg_deaths,
+      restart_rate,
+      early_quit_rate,
+      total_sessions,
+      unique_players,
+      playtime_variance: variance,
+    };
+
+    const analysis = analyzeGameplay(metrics);
+    const confidence = calculateConfidence(metrics);
+
+    const response = {
+      game_id,
+      risk_score: analysis.risk,
+      decision: analysis.decision,
+      confidence,
+      explanation: {
+        primary_risk: analysis.primaryRisk,
+        secondary_risk: analysis.secondaryRisk,
+        signals: analysis.signals,
+      },
+    };
+
+    return res.json(response);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Internal server error" });
   }
-);
+});
 
-/* ================= PERSONA: INVESTOR ================= */
-v1.get(
-  "/persona/investor",
-  readLimiter,
-  apiAuth,
-  async (req, res) => {
-    const { data } = await supabase
-      .from("risk_decisions")
-      .select("risk_score, decision")
-      .eq("game_id", req.game_id);
+// --------------------
+// Health Check
+// --------------------
+app.get("/", (_, res) => {
+  res.send("LaunchSense Backend is running");
+});
 
-    if (!data || data.length === 0)
-      return ok(res, { message: "No data yet" });
-
-    const kills = data.filter(d => d.decision === "KILL").length;
-    const avgRisk =
-      data.reduce((a, b) => a + b.risk_score, 0) / data.length;
-
-    const confidence = Math.max(
-      0,
-      1 - Math.abs(avgRisk - 0.5) * 2
-    );
-
-    ok(res, {
-      sessions: data.length,
-      kill_ratio: Number((kills / data.length).toFixed(2)),
-      avg_risk: Number(avgRisk.toFixed(2)),
-      confidence_score: Number(confidence.toFixed(2)),
-      investor_signal:
-        confidence > 0.7
-          ? "Consistent data — monitor closely"
-          : "Volatile signals — high uncertainty"
-    });
-  }
-);
-
-/* ================= HEALTH ================= */
-app.get("/health", (_, res) =>
-  res.json({
-    status: "ok",
-    version: CONFIG.VERSION,
-    time: new Date().toISOString()
-  })
-);
-
-/* ================= START ================= */
-app.listen(CONFIG.PORT, () => {
-  log("info", "server_started", {
-    version: CONFIG.VERSION,
-    port: CONFIG.PORT
-  });
+// --------------------
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`LaunchSense backend running on port ${PORT}`);
 });
