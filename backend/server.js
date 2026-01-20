@@ -1,4 +1,4 @@
-// LaunchSense Backend — Batch 2 (Signal Extraction Layer)
+// LaunchSense Backend — Batch 3 (Risk Scoring Engine)
 
 const express = require("express");
 const cors = require("cors");
@@ -23,7 +23,10 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "1.1-BATCH2"
+  VERSION: "1.2-BATCH3",
+
+  THRESH_GO: 0.35,
+  THRESH_KILL: 0.65
 };
 
 /* ================= CORE ================= */
@@ -78,7 +81,7 @@ const fail = (res, status, msg) =>
 /* ================= RATE LIMIT ================= */
 const sdkLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 120,
+  max: 100,
   keyGenerator: req => req.headers["x-api-key"] || req.ip
 });
 
@@ -108,9 +111,26 @@ async function apiAuth(req, res, next) {
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ================= SIGNAL EXTRACTION ================= */
+/* ================= RISK ENGINE ================= */
+function calculateRisk(signals) {
+  let risk = 0;
+
+  if (signals.early_exit) risk += 0.35;
+  if (signals.deaths_per_minute > 3) risk += 0.30;
+  if (signals.engagement_score < 0.2) risk += 0.35;
+
+  return Math.min(1, Number(risk.toFixed(2)));
+}
+
+function decide(risk) {
+  if (risk < CONFIG.THRESH_GO) return "GO";
+  if (risk > CONFIG.THRESH_KILL) return "KILL";
+  return "ITERATE";
+}
+
+/* ================= DECISION API ================= */
 v1.post(
-  "/sdk/signals",
+  "/sdk/decision",
   sdkLimiter,
   apiAuth,
   async (req, res) => {
@@ -118,66 +138,45 @@ v1.post(
       const { session_id } = req.body;
       if (!session_id) return fail(res, 400, "session_id required");
 
-      const { data: events } = await supabase
-        .from("raw_events")
-        .select("event_type, payload")
-        .eq("game_id", req.game_id)
-        .eq("session_id", session_id);
-
-      if (!events || events.length === 0)
-        return fail(res, 404, "No events found");
-
-      const deaths = events.filter(e => e.event_type === "death").length;
-      const eventsCount = events.length;
-
-      const timestamps = events
-        .map(e => e.payload?.t)
-        .filter(t => typeof t === "number");
-
-      const duration =
-        timestamps.length > 1
-          ? Math.max(...timestamps)
-          : 0;
-
-      const minutes = Math.max(duration / 60, 1);
-
-      const earlyExit = duration < 180;
-      const deathsPerMinute = deaths / minutes;
-
-      const engagementScore = Math.min(
-        1,
-        eventsCount / Math.max(duration, 30)
-      );
-
-      const { error } = await supabase
+      const { data: signals } = await supabase
         .from("session_signals")
-        .upsert({
-          game_id: req.game_id,
-          session_id,
-          session_duration: Math.round(duration),
-          events_count: eventsCount,
-          deaths_count: deaths,
-          deaths_per_minute: deathsPerMinute,
-          early_exit: earlyExit,
-          engagement_score: engagementScore
-        });
+        .select("*")
+        .eq("game_id", req.game_id)
+        .eq("session_id", session_id)
+        .maybeSingle();
 
-      if (error) {
-        log("error", "signal_insert_failed", { error });
-        return fail(res, 500, "Signal computation failed");
-      }
+      if (!signals)
+        return fail(res, 404, "Signals not computed yet");
+
+      const risk = calculateRisk(signals);
+      const decision = decide(risk);
+
+      const explanation =
+        decision === "GO"
+          ? "Players are engaging and progressing."
+          : decision === "KILL"
+          ? "High early abandonment and friction detected."
+          : "Mixed signals. Iteration recommended.";
+
+      await supabase.from("risk_decisions").insert({
+        game_id: req.game_id,
+        session_id,
+        risk_score: risk,
+        decision,
+        signals,
+        explanation
+      });
 
       ok(res, {
         session_id,
-        early_exit: earlyExit,
-        deaths,
-        deaths_per_minute: deathsPerMinute,
-        engagement_score: engagementScore
+        risk_score: risk,
+        decision,
+        explanation
       });
 
     } catch (e) {
-      log("error", "signal_exception", { error: e.message });
-      fail(res, 500, "Signal extraction error");
+      log("error", "decision_error", { error: e.message });
+      fail(res, 500, "Decision engine failure");
     }
   }
 );
