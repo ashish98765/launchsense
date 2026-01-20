@@ -1,5 +1,6 @@
 // LaunchSense Backend – Stable CommonJS Build
 
+const { extractInsights } = require("./insightEngine");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
