@@ -1,4 +1,4 @@
-// LaunchSense Backend — Batch 3 (Risk Scoring Engine)
+// LaunchSense Backend — Batch 4 (Aggregation & Trends)
 
 const express = require("express");
 const cors = require("cors");
@@ -23,10 +23,7 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "1.2-BATCH3",
-
-  THRESH_GO: 0.35,
-  THRESH_KILL: 0.65
+  VERSION: "1.3-BATCH4"
 };
 
 /* ================= CORE ================= */
@@ -79,9 +76,9 @@ const fail = (res, status, msg) =>
   });
 
 /* ================= RATE LIMIT ================= */
-const sdkLimiter = rateLimit({
+const readLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 100,
+  max: 120,
   keyGenerator: req => req.headers["x-api-key"] || req.ip
 });
 
@@ -111,72 +108,84 @@ async function apiAuth(req, res, next) {
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ================= RISK ENGINE ================= */
-function calculateRisk(signals) {
-  let risk = 0;
-
-  if (signals.early_exit) risk += 0.35;
-  if (signals.deaths_per_minute > 3) risk += 0.30;
-  if (signals.engagement_score < 0.2) risk += 0.35;
-
-  return Math.min(1, Number(risk.toFixed(2)));
-}
-
-function decide(risk) {
-  if (risk < CONFIG.THRESH_GO) return "GO";
-  if (risk > CONFIG.THRESH_KILL) return "KILL";
-  return "ITERATE";
-}
-
-/* ================= DECISION API ================= */
-v1.post(
-  "/sdk/decision",
-  sdkLimiter,
+/* ================= OVERVIEW ================= */
+v1.get(
+  "/analytics/overview",
+  readLimiter,
   apiAuth,
   async (req, res) => {
     try {
-      const { session_id } = req.body;
-      if (!session_id) return fail(res, 400, "session_id required");
+      const { data: decisions } = await supabase
+        .from("risk_decisions")
+        .select("risk_score, decision, signals")
+        .eq("game_id", req.game_id);
 
-      const { data: signals } = await supabase
-        .from("session_signals")
-        .select("*")
-        .eq("game_id", req.game_id)
-        .eq("session_id", session_id)
-        .maybeSingle();
+      if (!decisions || decisions.length === 0)
+        return ok(res, { message: "No data yet" });
 
-      if (!signals)
-        return fail(res, 404, "Signals not computed yet");
+      let totalRisk = 0;
+      let go = 0, iterate = 0, kill = 0;
+      let earlyExit = 0;
+      let totalEngagement = 0;
+      let totalDeathsRate = 0;
 
-      const risk = calculateRisk(signals);
-      const decision = decide(risk);
+      decisions.forEach(d => {
+        totalRisk += d.risk_score;
 
-      const explanation =
-        decision === "GO"
-          ? "Players are engaging and progressing."
-          : decision === "KILL"
-          ? "High early abandonment and friction detected."
-          : "Mixed signals. Iteration recommended.";
+        if (d.decision === "GO") go++;
+        if (d.decision === "ITERATE") iterate++;
+        if (d.decision === "KILL") kill++;
 
-      await supabase.from("risk_decisions").insert({
-        game_id: req.game_id,
-        session_id,
-        risk_score: risk,
-        decision,
-        signals,
-        explanation
+        if (d.signals?.early_exit) earlyExit++;
+        totalEngagement += d.signals?.engagement_score || 0;
+        totalDeathsRate += d.signals?.deaths_per_minute || 0;
       });
 
+      const count = decisions.length;
+
       ok(res, {
-        session_id,
-        risk_score: risk,
-        decision,
-        explanation
+        sessions: count,
+        avg_risk: Number((totalRisk / count).toFixed(2)),
+        decisions: { go, iterate, kill },
+        early_exit_rate: Number((earlyExit / count).toFixed(2)),
+        avg_engagement: Number((totalEngagement / count).toFixed(2)),
+        avg_deaths_per_minute: Number((totalDeathsRate / count).toFixed(2))
       });
 
     } catch (e) {
-      log("error", "decision_error", { error: e.message });
-      fail(res, 500, "Decision engine failure");
+      log("error", "overview_failed", { error: e.message });
+      fail(res, 500, "Overview analytics failed");
+    }
+  }
+);
+
+/* ================= TRENDS ================= */
+v1.get(
+  "/analytics/trends",
+  readLimiter,
+  apiAuth,
+  async (req, res) => {
+    try {
+      const { data } = await supabase
+        .from("risk_decisions")
+        .select("risk_score, decision, created_at")
+        .eq("game_id", req.game_id)
+        .order("created_at", { ascending: true });
+
+      if (!data || data.length === 0)
+        return ok(res, { message: "No trend data yet" });
+
+      const timeline = data.map(d => ({
+        date: d.created_at,
+        risk: d.risk_score,
+        decision: d.decision
+      }));
+
+      ok(res, { timeline });
+
+    } catch (e) {
+      log("error", "trends_failed", { error: e.message });
+      fail(res, 500, "Trend analytics failed");
     }
   }
 );
