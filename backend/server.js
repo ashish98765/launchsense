@@ -1,4 +1,5 @@
-// LaunchSense Backend — Batch 2 (Explainable Decision Engine)
+// LaunchSense Backend — Batch 3
+// History + Trends + Insight APIs
 // Stable CommonJS build (Render safe)
 
 const express = require("express");
@@ -25,12 +26,12 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L2-STABLE",
+  VERSION: "L3-STABLE",
   BASE_GO: 0.35,
   BASE_KILL: 0.65,
 };
 
-/* ================= CORE MIDDLEWARE ================= */
+/* ================= CORE ================= */
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: "300kb" }));
@@ -41,7 +42,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-/* ================= TRACE LOGGER ================= */
+/* ================= TRACE ================= */
 app.use((req, res, next) => {
   req.request_id = crypto.randomUUID();
   const start = Date.now();
@@ -105,16 +106,16 @@ async function apiAuth(req, res, next) {
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ================= PERSONA VIEW ================= */
+/* ================= PERSONA ================= */
 function personaView(decision, risk) {
   return {
-    founder: `Risk score ${Math.round(risk * 100)}%`,
+    founder: `Risk ${Math.round(risk * 100)}%`,
     designer:
       decision === "GO"
-        ? "Core loop feels healthy"
+        ? "Healthy loop"
         : decision === "KILL"
-        ? "Strong friction detected early"
-        : "Mixed signals — iterate",
+        ? "Severe friction"
+        : "Iteration required",
     investor:
       risk < 0.4
         ? "Low risk"
@@ -124,31 +125,16 @@ function personaView(decision, risk) {
   };
 }
 
-/* ================= EXPLAINABILITY ================= */
-function explainDecision(decision, risk) {
-  if (decision === "GO") {
-    return {
-      summary: "Players are engaging and staying longer.",
-      recommendation: "Proceed with confidence. Validate with larger sample.",
-    };
-  }
-
-  if (decision === "KILL") {
-    return {
-      summary: "Early exits and friction dominate player behavior.",
-      recommendation:
-        "Pause production. Rework core loop before investing more.",
-    };
-  }
-
-  return {
-    summary: "Some engagement exists, but friction blocks consistency.",
-    recommendation:
-      "Iterate on difficulty, onboarding, or pacing before next test.",
-  };
+/* ================= EXPLANATION ================= */
+function explainDecision(decision) {
+  if (decision === "GO")
+    return "Players engage and improve across sessions.";
+  if (decision === "KILL")
+    return "Early churn dominates. Core loop fails.";
+  return "Mixed signals. Needs iteration.";
 }
 
-/* ================= DECISION API ================= */
+/* ================= DECISION ================= */
 v1.post("/sdk/decision", sdkLimiter, apiAuth, async (req, res) => {
   try {
     const risk = calculateRiskScore(req.body);
@@ -168,16 +154,82 @@ v1.post("/sdk/decision", sdkLimiter, apiAuth, async (req, res) => {
     ok(res, {
       decision,
       risk_score: Math.round(risk * 100),
-      confidence:
-        risk < 0.45 || risk > 0.55 ? "Medium" : "Low",
       personas: personaView(decision, risk),
-      explanation: explainDecision(decision, risk),
+      explanation: explainDecision(decision),
       version: CONFIG.VERSION,
     });
   } catch (e) {
     console.error(e);
     fail(res, 500, "Decision failed");
   }
+});
+
+/* ================= HISTORY ================= */
+v1.get("/history", apiAuth, async (req, res) => {
+  const { data } = await supabase
+    .from("decision_logs")
+    .select("decision,risk_score,created_at")
+    .eq("game_id", req.game_id)
+    .order("created_at", { ascending: false })
+    .limit(20);
+
+  ok(res, data || []);
+});
+
+/* ================= TRENDS ================= */
+v1.get("/trends", apiAuth, async (req, res) => {
+  const { data } = await supabase
+    .from("decision_logs")
+    .select("risk_score,created_at")
+    .eq("game_id", req.game_id)
+    .order("created_at", { ascending: true })
+    .limit(50);
+
+  if (!data || data.length < 2)
+    return ok(res, { trend: "insufficient_data" });
+
+  const first = data[0].risk_score;
+  const last = data[data.length - 1].risk_score;
+
+  let trend = "stable";
+  if (last < first - 5) trend = "improving";
+  if (last > first + 5) trend = "degrading";
+
+  ok(res, {
+    trend,
+    first_risk: first,
+    last_risk: last,
+    samples: data.length,
+  });
+});
+
+/* ================= INSIGHT ================= */
+v1.get("/insight", apiAuth, async (req, res) => {
+  const { data } = await supabase
+    .from("decision_logs")
+    .select("decision,risk_score")
+    .eq("game_id", req.game_id)
+    .order("created_at", { ascending: false })
+    .limit(10);
+
+  if (!data || data.length === 0)
+    return ok(res, { message: "No insights yet" });
+
+  const avg =
+    data.reduce((a, b) => a + b.risk_score, 0) / data.length;
+
+  let insight =
+    avg < 40
+      ? "Game shows healthy early signals."
+      : avg > 60
+      ? "Game repeatedly shows high risk."
+      : "Game is unstable — iteration advised.";
+
+  ok(res, {
+    average_risk: Math.round(avg),
+    insight,
+    samples: data.length,
+  });
 });
 
 /* ================= HEALTH ================= */
