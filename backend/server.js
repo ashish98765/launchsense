@@ -1,6 +1,6 @@
-// LaunchSense Backend — Batch 5
-// Aggregated Summary + Founder / Investor View
-// Stable | Render-ready | SaaS-grade
+// LaunchSense Backend — Batch 6
+// Multi-Game Portfolio + Studio-Level Intelligence
+// SaaS-grade | Render-ready | Stable
 
 const express = require("express");
 const cors = require("cors");
@@ -26,7 +26,7 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L5-SUMMARY",
+  VERSION: "L6-PORTFOLIO",
   GO: 0.35,
   KILL: 0.65,
 };
@@ -86,14 +86,16 @@ async function apiAuth(req, res, next) {
 
   const { data } = await supabase
     .from("api_keys")
-    .select("id")
+    .select("studio_id")
     .eq("api_key", apiKey)
     .eq("game_id", gameId)
     .eq("revoked", false)
     .maybeSingle();
 
   if (!data) return fail(res, 401, "Invalid API key");
+
   req.game_id = gameId;
+  req.studio_id = data.studio_id;
   next();
 }
 
@@ -122,6 +124,7 @@ v1.post("/sdk/decision", sdkLimiter, apiAuth, async (req, res) => {
 
     await supabase.from("decision_logs").insert({
       game_id: req.game_id,
+      studio_id: req.studio_id,
       decision,
       risk_score: riskPct,
       benchmark_tier: benchmarkTier(riskPct),
@@ -133,16 +136,12 @@ v1.post("/sdk/decision", sdkLimiter, apiAuth, async (req, res) => {
       benchmark: benchmarkTier(riskPct),
       version: CONFIG.VERSION,
     });
-  } catch (e) {
+  } catch {
     fail(res, 500, "Decision failed");
   }
 });
 
-/* ================= SUMMARY (CEO VIEW) ================= */
-/*
-  This endpoint is the HEART of SaaS value.
-  One call = investor / founder clarity.
-*/
+/* ================= GAME SUMMARY ================= */
 v1.get("/summary", apiAuth, async (req, res) => {
   const { data } = await supabase
     .from("decision_logs")
@@ -157,31 +156,65 @@ v1.get("/summary", apiAuth, async (req, res) => {
   const avgRisk =
     data.reduce((a, b) => a + b.risk_score, 0) / data.length;
 
-  const kills = data.filter((d) => d.decision === "KILL").length;
-  const gos = data.filter((d) => d.decision === "GO").length;
-
-  const health =
-    avgRisk < 40
-      ? "strong"
-      : avgRisk < 60
-      ? "moderate"
-      : "weak";
-
   ok(res, {
     average_risk: Math.round(avgRisk),
     benchmark: benchmarkTier(avgRisk),
-    health,
-    signals: {
-      go_signals: gos,
-      kill_signals: kills,
-      total_samples: data.length,
-    },
-    investor_summary:
-      health === "strong"
-        ? "Game shows strong early retention signals."
-        : health === "weak"
-        ? "High early risk. Pivot recommended."
-        : "Game needs iteration before scaling.",
+    health:
+      avgRisk < 40 ? "strong" : avgRisk < 60 ? "moderate" : "weak",
+  });
+});
+
+/* ================= STUDIO PORTFOLIO ================= */
+/*
+  THIS is the SaaS killer endpoint.
+  One view = all games, all risks, capital allocation clarity.
+*/
+v1.get("/portfolio", apiAuth, async (req, res) => {
+  const { data } = await supabase
+    .from("decision_logs")
+    .select("game_id, risk_score, decision")
+    .eq("studio_id", req.studio_id);
+
+  if (!data || data.length === 0)
+    return ok(res, { message: "No portfolio data" });
+
+  const games = {};
+
+  data.forEach((row) => {
+    if (!games[row.game_id]) {
+      games[row.game_id] = {
+        samples: 0,
+        totalRisk: 0,
+        kills: 0,
+        gos: 0,
+      };
+    }
+    games[row.game_id].samples++;
+    games[row.game_id].totalRisk += row.risk_score;
+    if (row.decision === "KILL") games[row.game_id].kills++;
+    if (row.decision === "GO") games[row.game_id].gos++;
+  });
+
+  const portfolio = Object.entries(games).map(([gameId, g]) => {
+    const avg = g.totalRisk / g.samples;
+    return {
+      game_id: gameId,
+      avg_risk: Math.round(avg),
+      benchmark: benchmarkTier(avg),
+      signals: {
+        samples: g.samples,
+        go: g.gos,
+        kill: g.kills,
+      },
+      status:
+        avg < 40 ? "scale" : avg < 60 ? "iterate" : "terminate",
+    };
+  });
+
+  ok(res, {
+    studio_id: req.studio_id,
+    total_games: portfolio.length,
+    portfolio,
   });
 });
 
