@@ -1,9 +1,10 @@
-// LaunchSense Backend — Layer 2 / Batch 1
-// Focus: Auth + Ownership Hardening
+// LaunchSense Backend — Layer 2 / Batch 2
+// Focus: Validation + Rate Limiting (Production Hardening)
 
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
 require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
@@ -26,15 +27,16 @@ app.disable("x-powered-by");
 /* ===================== CONFIG ===================== */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L2-B1",
+  VERSION: "L2-B2",
   BASE_GO: 0.35,
   BASE_KILL: 0.65,
+  MAX_BODY_KB: "300kb",
 };
 
 /* ===================== CORE MIDDLEWARE ===================== */
 app.use(helmet());
 app.use(cors());
-app.use(express.json({ limit: "300kb" }));
+app.use(express.json({ limit: CONFIG.MAX_BODY_KB }));
 
 /* ===================== SUPABASE ===================== */
 const supabase = createClient(
@@ -46,6 +48,21 @@ const supabase = createClient(
 const ok = (res, data) => res.json({ success: true, data });
 const fail = (res, status, msg) =>
   res.status(status).json({ success: false, error: msg });
+
+/* ===================== RATE LIMIT ===================== */
+/**
+ * Rate limit per API key (fallback = IP)
+ */
+const sdkLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) =>
+    req.headers["x-api-key"] || req.ip,
+  handler: (_, res) =>
+    fail(res, 429, "Rate limit exceeded"),
+});
 
 /* ===================== AUTH MIDDLEWARE ===================== */
 async function apiAuth(req, res, next) {
@@ -80,6 +97,40 @@ async function apiAuth(req, res, next) {
   }
 }
 
+/* ===================== INPUT VALIDATION ===================== */
+function validateDecisionPayload(req, res, next) {
+  const body = req.body;
+
+  if (!body || typeof body !== "object") {
+    return fail(res, 400, "Invalid payload");
+  }
+
+  const required = ["sessions", "events"];
+  for (const key of required) {
+    if (!(key in body)) {
+      return fail(res, 400, `Missing field: ${key}`);
+    }
+  }
+
+  if (!Array.isArray(body.sessions)) {
+    return fail(res, 400, "sessions must be an array");
+  }
+
+  if (!Array.isArray(body.events)) {
+    return fail(res, 400, "events must be an array");
+  }
+
+  if (body.sessions.length === 0) {
+    return fail(res, 400, "sessions cannot be empty");
+  }
+
+  if (body.sessions.length > 500) {
+    return fail(res, 413, "Too many sessions");
+  }
+
+  next();
+}
+
 /* ===================== ROUTER ===================== */
 const v1 = express.Router();
 app.use("/v1", v1);
@@ -87,17 +138,19 @@ app.use("/v1", v1);
 /* ===================== PERSONA VIEWS ===================== */
 function personaView(decision, risk) {
   return {
-    founder: `Risk exposure is ${Math.round(risk * 100)}%. Decision: ${decision}.`,
+    founder: `Risk exposure ${Math.round(
+      risk * 100
+    )}%. Decision: ${decision}.`,
     designer:
       decision === "GO"
-        ? "Engagement signals are healthy."
-        : "Gameplay friction detected. Iteration recommended.",
+        ? "Strong engagement detected."
+        : "Friction signals present. Iterate.",
     investor:
       risk < 0.4
-        ? "Favorable early signals."
+        ? "Favorable early metrics."
         : risk > 0.6
         ? "High risk profile."
-        : "Moderate risk with upside.",
+        : "Moderate uncertainty.",
   };
 }
 
@@ -109,36 +162,42 @@ function benchmarkSignal(risk) {
 }
 
 /* ===================== PLAIN ENGLISH ===================== */
-function explainPlain(decision, risk) {
+function explainPlain(decision) {
   if (decision === "GO")
-    return "Players are engaging and staying longer.";
+    return "Players are staying and engaging.";
   if (decision === "KILL")
-    return "Players are leaving early with low retention.";
-  return "Mixed signals detected. Improvements needed.";
+    return "Early exits dominate. Retention weak.";
+  return "Mixed results. Improvements recommended.";
 }
 
 /* ===================== DECISION ENDPOINT ===================== */
-v1.post("/sdk/decision", apiAuth, async (req, res) => {
-  try {
-    const risk = calculateRiskScore(req.body);
+v1.post(
+  "/sdk/decision",
+  sdkLimiter,
+  apiAuth,
+  validateDecisionPayload,
+  async (req, res) => {
+    try {
+      const risk = calculateRiskScore(req.body);
 
-    let decision = "ITERATE";
-    if (risk < CONFIG.BASE_GO) decision = "GO";
-    if (risk > CONFIG.BASE_KILL) decision = "KILL";
+      let decision = "ITERATE";
+      if (risk < CONFIG.BASE_GO) decision = "GO";
+      if (risk > CONFIG.BASE_KILL) decision = "KILL";
 
-    ok(res, {
-      decision,
-      risk_score: Math.round(risk * 100),
-      personas: personaView(decision, risk),
-      benchmark: benchmarkSignal(risk),
-      plain_english: explainPlain(decision, risk),
-      version: CONFIG.VERSION,
-    });
-  } catch (e) {
-    console.error("DECISION ERROR:", e);
-    fail(res, 500, "Decision processing failed");
+      ok(res, {
+        decision,
+        risk_score: Math.round(risk * 100),
+        personas: personaView(decision, risk),
+        benchmark: benchmarkSignal(risk),
+        plain_english: explainPlain(decision),
+        version: CONFIG.VERSION,
+      });
+    } catch (e) {
+      console.error("DECISION ERROR:", e);
+      fail(res, 500, "Decision processing failed");
+    }
   }
-});
+);
 
 /* ===================== START ===================== */
 app.listen(CONFIG.PORT, () => {
