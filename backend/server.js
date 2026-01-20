@@ -1,6 +1,6 @@
-// LaunchSense Backend — Batch 7
-// AI Narrative + Insight Engine
-// World-class SaaS backend | Render ready
+// LaunchSense Backend — Batch 8
+// Abuse Detection + Trust Scoring Layer
+// Render-ready | Full replace server.js
 
 const express = require("express");
 const cors = require("cors");
@@ -15,7 +15,7 @@ const { calculateRiskScore } = require("./decisionEngine");
 const app = express();
 app.disable("x-powered-by");
 
-/* ================= ENV ================= */
+/* ================= ENV CHECK ================= */
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach((k) => {
   if (!process.env[k]) {
     console.error("Missing ENV:", k);
@@ -26,7 +26,7 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L7-NARRATIVE",
+  VERSION: "L8-ABUSE",
   GO: 0.35,
   KILL: 0.65,
 };
@@ -60,10 +60,12 @@ const fail = (res, code, msg) =>
   });
 
 /* ================= RATE LIMIT ================= */
-const limiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 60,
-});
+app.use(
+  rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+  })
+);
 
 /* ================= AUTH ================= */
 async function apiAuth(req, res, next) {
@@ -86,44 +88,61 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-/* ================= AI NARRATIVE ENGINE ================= */
-function generateNarrative({ risk, decision, metrics }) {
+/* ================= ABUSE DETECTION ================= */
+function detectAbuse(metrics) {
+  let flags = [];
+  let trust = 1.0;
+
+  if (metrics.avg_playtime > 36000) {
+    flags.push("IMPOSSIBLE_PLAYTIME");
+    trust -= 0.4;
+  }
+
+  if (metrics.deaths_per_session > 50) {
+    flags.push("BOT_DEATH_PATTERN");
+    trust -= 0.3;
+  }
+
+  if (metrics.early_quit_rate === 0 || metrics.early_quit_rate === 1) {
+    flags.push("UNNATURAL_QUIT_RATE");
+    trust -= 0.2;
+  }
+
+  if (metrics.sessions_reported > 50000) {
+    flags.push("MASS_SYNTHETIC_UPLOAD");
+    trust -= 0.5;
+  }
+
+  trust = Math.max(trust, 0.1);
+  return { trust_score: trust, abuse_flags: flags };
+}
+
+/* ================= NARRATIVE ENGINE ================= */
+function generateNarrative({ decision, metrics, abuse }) {
   const lines = [];
 
-  if (decision === "GO") {
+  if (abuse.trust_score < 0.6) {
     lines.push(
-      "Players are engaging positively with the core gameplay loop."
+      "Data quality issues detected. Results are partially confidence-weighted."
     );
   }
 
+  if (decision === "GO") {
+    lines.push("Core gameplay loop shows healthy engagement.");
+  }
+
   if (decision === "ITERATE") {
-    lines.push(
-      "The game shows potential but certain friction points are holding it back."
-    );
+    lines.push("Game shows promise but requires targeted improvements.");
   }
 
   if (decision === "KILL") {
     lines.push(
-      "Player behavior indicates fundamental issues with the core experience."
-    );
-  }
-
-  if (metrics.early_quit_rate > 0.4) {
-    lines.push(
-      "A high number of players quit early, suggesting weak first-session retention."
-    );
-  }
-
-  if (metrics.deaths_per_session > 5) {
-    lines.push(
-      "Frequent player deaths indicate difficulty spikes or unclear mechanics."
+      "Player behavior indicates fundamental engagement breakdown."
     );
   }
 
   if (metrics.avg_playtime < 300) {
-    lines.push(
-      "Average playtime is low, pointing to insufficient engagement depth."
-    );
+    lines.push("Average playtime is too low to sustain long-term retention.");
   }
 
   return lines.join(" ");
@@ -131,28 +150,32 @@ function generateNarrative({ risk, decision, metrics }) {
 
 /* ================= ROUTER ================= */
 const v1 = express.Router();
-app.use("/v1", limiter, v1);
+app.use("/v1", v1);
 
-/* ================= DECISION + NARRATIVE ================= */
+/* ================= DECISION ENDPOINT ================= */
 v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
-    const risk = calculateRiskScore(req.body);
-    const riskPct = Math.round(risk * 100);
-
-    let decision = "ITERATE";
-    if (risk < CONFIG.GO) decision = "GO";
-    if (risk > CONFIG.KILL) decision = "KILL";
-
     const metrics = {
-      early_quit_rate: req.body.early_quit_rate || 0,
-      deaths_per_session: req.body.deaths_per_session || 0,
       avg_playtime: req.body.avg_playtime || 0,
+      deaths_per_session: req.body.deaths_per_session || 0,
+      early_quit_rate: req.body.early_quit_rate || 0,
+      sessions_reported: req.body.sessions_reported || 0,
     };
 
+    const abuse = detectAbuse(metrics);
+
+    let rawRisk = calculateRiskScore(metrics);
+    let adjustedRisk = rawRisk * abuse.trust_score;
+    let riskPct = Math.round(adjustedRisk * 100);
+
+    let decision = "ITERATE";
+    if (adjustedRisk < CONFIG.GO) decision = "GO";
+    if (adjustedRisk > CONFIG.KILL) decision = "KILL";
+
     const narrative = generateNarrative({
-      risk: riskPct,
       decision,
       metrics,
+      abuse,
     });
 
     await supabase.from("decision_logs").insert({
@@ -160,17 +183,22 @@ v1.post("/sdk/decision", apiAuth, async (req, res) => {
       studio_id: req.studio_id,
       decision,
       risk_score: riskPct,
+      trust_score: abuse.trust_score,
+      abuse_flags: abuse.abuse_flags,
       narrative,
     });
 
     ok(res, {
       decision,
       risk_score: riskPct,
+      trust_score: abuse.trust_score,
+      abuse_flags: abuse.abuse_flags,
       narrative,
       version: CONFIG.VERSION,
     });
-  } catch {
-    fail(res, 500, "Decision engine failed");
+  } catch (e) {
+    console.error(e);
+    fail(res, 500, "Decision engine failure");
   }
 });
 
