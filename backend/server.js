@@ -1,6 +1,6 @@
-// LaunchSense Backend — Batch 4
-// Benchmarks + Industry Comparison + Confidence
-// Stable CommonJS | Render-safe
+// LaunchSense Backend — Batch 5
+// Aggregated Summary + Founder / Investor View
+// Stable | Render-ready | SaaS-grade
 
 const express = require("express");
 const cors = require("cors");
@@ -26,7 +26,7 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L4-BENCHMARK",
+  VERSION: "L5-SUMMARY",
   GO: 0.35,
   KILL: 0.65,
 };
@@ -46,7 +46,6 @@ const supabase = createClient(
 app.use((req, res, next) => {
   req.request_id = crypto.randomUUID();
   const start = Date.now();
-
   res.on("finish", () => {
     console.log(
       JSON.stringify({
@@ -102,24 +101,13 @@ async function apiAuth(req, res, next) {
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ================= BENCHMARK ENGINE ================= */
-/*
- Industry baseline (static for now, later dynamic):
-  - Top 25% games: avg risk ~30
-  - Median games: avg risk ~50
-  - Bottom 25%: avg risk ~70
-*/
-
-function benchmarkPosition(risk) {
-  if (risk <= 30)
-    return { tier: "top_25_percent", confidence: "very_high" };
-  if (risk <= 45)
-    return { tier: "above_average", confidence: "high" };
-  if (risk <= 60)
-    return { tier: "average", confidence: "medium" };
-  if (risk <= 75)
-    return { tier: "below_average", confidence: "low" };
-  return { tier: "bottom_25_percent", confidence: "very_low" };
+/* ================= BENCHMARK ================= */
+function benchmarkTier(risk) {
+  if (risk <= 30) return "top_25_percent";
+  if (risk <= 45) return "above_average";
+  if (risk <= 60) return "average";
+  if (risk <= 75) return "below_average";
+  return "bottom_25_percent";
 }
 
 /* ================= DECISION ================= */
@@ -132,54 +120,68 @@ v1.post("/sdk/decision", sdkLimiter, apiAuth, async (req, res) => {
     if (risk < CONFIG.GO) decision = "GO";
     if (risk > CONFIG.KILL) decision = "KILL";
 
-    const benchmark = benchmarkPosition(riskPct);
-
     await supabase.from("decision_logs").insert({
       game_id: req.game_id,
       decision,
       risk_score: riskPct,
-      benchmark_tier: benchmark.tier,
+      benchmark_tier: benchmarkTier(riskPct),
     });
 
     ok(res, {
       decision,
       risk_score: riskPct,
-      benchmark,
-      confidence_signal: benchmark.confidence,
+      benchmark: benchmarkTier(riskPct),
       version: CONFIG.VERSION,
     });
   } catch (e) {
-    console.error(e);
     fail(res, 500, "Decision failed");
   }
 });
 
-/* ================= BENCHMARK API ================= */
-v1.get("/benchmark", apiAuth, async (req, res) => {
+/* ================= SUMMARY (CEO VIEW) ================= */
+/*
+  This endpoint is the HEART of SaaS value.
+  One call = investor / founder clarity.
+*/
+v1.get("/summary", apiAuth, async (req, res) => {
   const { data } = await supabase
     .from("decision_logs")
-    .select("risk_score")
+    .select("risk_score, decision")
     .eq("game_id", req.game_id)
     .order("created_at", { ascending: false })
-    .limit(10);
+    .limit(20);
 
   if (!data || data.length === 0)
-    return ok(res, { message: "No benchmark data yet" });
+    return ok(res, { message: "No data yet" });
 
-  const avg =
+  const avgRisk =
     data.reduce((a, b) => a + b.risk_score, 0) / data.length;
 
-  const benchmark = benchmarkPosition(avg);
+  const kills = data.filter((d) => d.decision === "KILL").length;
+  const gos = data.filter((d) => d.decision === "GO").length;
+
+  const health =
+    avgRisk < 40
+      ? "strong"
+      : avgRisk < 60
+      ? "moderate"
+      : "weak";
 
   ok(res, {
-    average_risk: Math.round(avg),
-    benchmark,
-    industry_message:
-      benchmark.tier === "top_25_percent"
-        ? "Your game outperforms most launches."
-        : benchmark.tier === "bottom_25_percent"
-        ? "Your game underperforms industry baseline."
-        : "Your game is close to industry average.",
+    average_risk: Math.round(avgRisk),
+    benchmark: benchmarkTier(avgRisk),
+    health,
+    signals: {
+      go_signals: gos,
+      kill_signals: kills,
+      total_samples: data.length,
+    },
+    investor_summary:
+      health === "strong"
+        ? "Game shows strong early retention signals."
+        : health === "weak"
+        ? "High early risk. Pivot recommended."
+        : "Game needs iteration before scaling.",
   });
 });
 
