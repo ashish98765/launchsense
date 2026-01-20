@@ -49,19 +49,19 @@ function analyzeGameplay(metrics) {
   if (risk >= 40 && risk < 70) decision = "ITERATE";
   if (risk >= 70) decision = "KILL";
 
-  return {
-    risk,
-    decision,
-    primaryRisk:
-      retentionRisk >= funRisk && retentionRisk >= difficultyRisk
-        ? "retention"
-        : difficultyRisk >= funRisk
-        ? "difficulty"
-        : "fun",
-    signals,
-  };
+  const primaryRisk =
+    retentionRisk >= funRisk && retentionRisk >= difficultyRisk
+      ? "retention"
+      : difficultyRisk >= funRisk
+      ? "difficulty"
+      : "fun";
+
+  return { risk, decision, primaryRisk, signals };
 }
 
+/* ------------------------------
+   CONFIDENCE
+--------------------------------*/
 function calculateConfidence(metrics) {
   const p = Math.min(metrics.unique_players / 50, 1);
   const s = Math.min(metrics.total_sessions / 100, 1);
@@ -69,13 +69,61 @@ function calculateConfidence(metrics) {
 }
 
 /* ------------------------------
-   ANALYZE ENDPOINT (LOCK SAFE)
+   SUGGESTIONS ENGINE (NEW)
+--------------------------------*/
+function generateSuggestions(primaryRisk, decision) {
+  const suggestions = [];
+
+  if (primaryRisk === "retention") {
+    suggestions.push(
+      "Reduce first-session duration to under 5 minutes",
+      "Improve onboarding clarity in first 60 seconds",
+      "Add early progression reward within first 2 minutes"
+    );
+  }
+
+  if (primaryRisk === "difficulty") {
+    suggestions.push(
+      "Flatten difficulty curve in early levels",
+      "Add mid-level checkpoints",
+      "Reduce enemy damage in first 10 minutes"
+    );
+  }
+
+  if (primaryRisk === "fun") {
+    suggestions.push(
+      "Strengthen core gameplay feedback (VFX/SFX)",
+      "Add short-term goals per session",
+      "Reduce friction in main game loop"
+    );
+  }
+
+  if (decision === "GO") {
+    suggestions.unshift(
+      "Proceed to wider playtest (50–100 users)",
+      "Validate retention on Day-1 and Day-3"
+    );
+  }
+
+  if (decision === "KILL") {
+    suggestions.push(
+      "Do not invest further development time",
+      "Salvage strong mechanics into next prototype",
+      "Archive project with learnings documented"
+    );
+  }
+
+  return suggestions;
+}
+
+/* ------------------------------
+   ANALYZE ENDPOINT
 --------------------------------*/
 app.post("/analyze", async (req, res) => {
   const { game_id } = req.body;
   if (!game_id) return res.status(400).json({ error: "game_id required" });
 
-  // 1️⃣ Check kill-lock
+  // Kill lock check
   const { data: lastDecision } = await supabase
     .from("decisions")
     .select("*")
@@ -90,46 +138,41 @@ app.post("/analyze", async (req, res) => {
     });
   }
 
-  // 2️⃣ Fetch gameplay data
-  const { data, error } = await supabase
+  // Fetch gameplay data
+  const { data } = await supabase
     .from("gameplay_metrics")
     .select("*")
     .eq("game_id", game_id);
 
-  if (error || !data || data.length === 0) {
+  if (!data || data.length === 0) {
     return res.status(404).json({ error: "No gameplay data found" });
   }
 
-  // 3️⃣ Aggregate metrics
+  // Aggregate metrics
   const total_sessions = data.length;
   const unique_players = new Set(data.map(d => d.player_id)).size;
 
-  const avg_playtime =
-    data.reduce((a, b) => a + b.playtime, 0) / total_sessions;
-
-  const avg_deaths =
-    data.reduce((a, b) => a + b.deaths, 0) / total_sessions;
-
-  const restart_rate =
-    data.filter(d => d.restarts > 0).length / total_sessions;
-
-  const early_quit_rate =
-    data.filter(d => d.early_quit === true).length / total_sessions;
-
   const metrics = {
-    avg_playtime,
-    avg_deaths,
-    restart_rate,
-    early_quit_rate,
+    avg_playtime:
+      data.reduce((a, b) => a + b.playtime, 0) / total_sessions,
+    avg_deaths:
+      data.reduce((a, b) => a + b.deaths, 0) / total_sessions,
+    restart_rate:
+      data.filter(d => d.restarts > 0).length / total_sessions,
+    early_quit_rate:
+      data.filter(d => d.early_quit === true).length / total_sessions,
     total_sessions,
     unique_players,
   };
 
-  // 4️⃣ Analysis
+  // Analysis
   const analysis = analyzeGameplay(metrics);
   const confidence = calculateConfidence(metrics);
+  const suggestions = generateSuggestions(
+    analysis.primaryRisk,
+    analysis.decision
+  );
 
-  // 5️⃣ Save decision
   const lock = analysis.decision === "KILL";
 
   await supabase.from("decisions").insert({
@@ -140,7 +183,6 @@ app.post("/analyze", async (req, res) => {
     locked: lock,
   });
 
-  // 6️⃣ Response
   res.json({
     game_id,
     risk_score: analysis.risk,
@@ -150,6 +192,7 @@ app.post("/analyze", async (req, res) => {
       primary_risk: analysis.primaryRisk,
       signals: analysis.signals,
     },
+    suggestions,
     locked: lock,
   });
 });
@@ -158,7 +201,7 @@ app.post("/analyze", async (req, res) => {
    HEALTH
 --------------------------------*/
 app.get("/", (_, res) => {
-  res.send("LaunchSense Backend v2 running");
+  res.send("LaunchSense Backend v3 running");
 });
 
 const PORT = process.env.PORT || 3000;
