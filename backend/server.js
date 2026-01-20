@@ -1,6 +1,6 @@
-// LaunchSense Backend — Batch 6
-// Multi-Game Portfolio + Studio-Level Intelligence
-// SaaS-grade | Render-ready | Stable
+// LaunchSense Backend — Batch 7
+// AI Narrative + Insight Engine
+// World-class SaaS backend | Render ready
 
 const express = require("express");
 const cors = require("cors");
@@ -26,7 +26,7 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L6-PORTFOLIO",
+  VERSION: "L7-NARRATIVE",
   GO: 0.35,
   KILL: 0.65,
 };
@@ -45,17 +45,6 @@ const supabase = createClient(
 /* ================= TRACE ================= */
 app.use((req, res, next) => {
   req.request_id = crypto.randomUUID();
-  const start = Date.now();
-  res.on("finish", () => {
-    console.log(
-      JSON.stringify({
-        id: req.request_id,
-        path: req.originalUrl,
-        status: res.statusCode,
-        ms: Date.now() - start,
-      })
-    );
-  });
   next();
 });
 
@@ -71,18 +60,16 @@ const fail = (res, code, msg) =>
   });
 
 /* ================= RATE LIMIT ================= */
-const sdkLimiter = rateLimit({
+const limiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
-  keyGenerator: (req) => req.headers["x-api-key"] || req.ip,
 });
 
 /* ================= AUTH ================= */
 async function apiAuth(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   const gameId = req.headers["x-game-id"];
-  if (!apiKey || !gameId)
-    return fail(res, 401, "Missing API credentials");
+  if (!apiKey || !gameId) return fail(res, 401, "Missing API credentials");
 
   const { data } = await supabase
     .from("api_keys")
@@ -99,21 +86,55 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-/* ================= ROUTER ================= */
-const v1 = express.Router();
-app.use("/v1", v1);
+/* ================= AI NARRATIVE ENGINE ================= */
+function generateNarrative({ risk, decision, metrics }) {
+  const lines = [];
 
-/* ================= BENCHMARK ================= */
-function benchmarkTier(risk) {
-  if (risk <= 30) return "top_25_percent";
-  if (risk <= 45) return "above_average";
-  if (risk <= 60) return "average";
-  if (risk <= 75) return "below_average";
-  return "bottom_25_percent";
+  if (decision === "GO") {
+    lines.push(
+      "Players are engaging positively with the core gameplay loop."
+    );
+  }
+
+  if (decision === "ITERATE") {
+    lines.push(
+      "The game shows potential but certain friction points are holding it back."
+    );
+  }
+
+  if (decision === "KILL") {
+    lines.push(
+      "Player behavior indicates fundamental issues with the core experience."
+    );
+  }
+
+  if (metrics.early_quit_rate > 0.4) {
+    lines.push(
+      "A high number of players quit early, suggesting weak first-session retention."
+    );
+  }
+
+  if (metrics.deaths_per_session > 5) {
+    lines.push(
+      "Frequent player deaths indicate difficulty spikes or unclear mechanics."
+    );
+  }
+
+  if (metrics.avg_playtime < 300) {
+    lines.push(
+      "Average playtime is low, pointing to insufficient engagement depth."
+    );
+  }
+
+  return lines.join(" ");
 }
 
-/* ================= DECISION ================= */
-v1.post("/sdk/decision", sdkLimiter, apiAuth, async (req, res) => {
+/* ================= ROUTER ================= */
+const v1 = express.Router();
+app.use("/v1", limiter, v1);
+
+/* ================= DECISION + NARRATIVE ================= */
+v1.post("/sdk/decision", apiAuth, async (req, res) => {
   try {
     const risk = calculateRiskScore(req.body);
     const riskPct = Math.round(risk * 100);
@@ -122,100 +143,35 @@ v1.post("/sdk/decision", sdkLimiter, apiAuth, async (req, res) => {
     if (risk < CONFIG.GO) decision = "GO";
     if (risk > CONFIG.KILL) decision = "KILL";
 
+    const metrics = {
+      early_quit_rate: req.body.early_quit_rate || 0,
+      deaths_per_session: req.body.deaths_per_session || 0,
+      avg_playtime: req.body.avg_playtime || 0,
+    };
+
+    const narrative = generateNarrative({
+      risk: riskPct,
+      decision,
+      metrics,
+    });
+
     await supabase.from("decision_logs").insert({
       game_id: req.game_id,
       studio_id: req.studio_id,
       decision,
       risk_score: riskPct,
-      benchmark_tier: benchmarkTier(riskPct),
+      narrative,
     });
 
     ok(res, {
       decision,
       risk_score: riskPct,
-      benchmark: benchmarkTier(riskPct),
+      narrative,
       version: CONFIG.VERSION,
     });
   } catch {
-    fail(res, 500, "Decision failed");
+    fail(res, 500, "Decision engine failed");
   }
-});
-
-/* ================= GAME SUMMARY ================= */
-v1.get("/summary", apiAuth, async (req, res) => {
-  const { data } = await supabase
-    .from("decision_logs")
-    .select("risk_score, decision")
-    .eq("game_id", req.game_id)
-    .order("created_at", { ascending: false })
-    .limit(20);
-
-  if (!data || data.length === 0)
-    return ok(res, { message: "No data yet" });
-
-  const avgRisk =
-    data.reduce((a, b) => a + b.risk_score, 0) / data.length;
-
-  ok(res, {
-    average_risk: Math.round(avgRisk),
-    benchmark: benchmarkTier(avgRisk),
-    health:
-      avgRisk < 40 ? "strong" : avgRisk < 60 ? "moderate" : "weak",
-  });
-});
-
-/* ================= STUDIO PORTFOLIO ================= */
-/*
-  THIS is the SaaS killer endpoint.
-  One view = all games, all risks, capital allocation clarity.
-*/
-v1.get("/portfolio", apiAuth, async (req, res) => {
-  const { data } = await supabase
-    .from("decision_logs")
-    .select("game_id, risk_score, decision")
-    .eq("studio_id", req.studio_id);
-
-  if (!data || data.length === 0)
-    return ok(res, { message: "No portfolio data" });
-
-  const games = {};
-
-  data.forEach((row) => {
-    if (!games[row.game_id]) {
-      games[row.game_id] = {
-        samples: 0,
-        totalRisk: 0,
-        kills: 0,
-        gos: 0,
-      };
-    }
-    games[row.game_id].samples++;
-    games[row.game_id].totalRisk += row.risk_score;
-    if (row.decision === "KILL") games[row.game_id].kills++;
-    if (row.decision === "GO") games[row.game_id].gos++;
-  });
-
-  const portfolio = Object.entries(games).map(([gameId, g]) => {
-    const avg = g.totalRisk / g.samples;
-    return {
-      game_id: gameId,
-      avg_risk: Math.round(avg),
-      benchmark: benchmarkTier(avg),
-      signals: {
-        samples: g.samples,
-        go: g.gos,
-        kill: g.kills,
-      },
-      status:
-        avg < 40 ? "scale" : avg < 60 ? "iterate" : "terminate",
-    };
-  });
-
-  ok(res, {
-    studio_id: req.studio_id,
-    total_games: portfolio.length,
-    portfolio,
-  });
 });
 
 /* ================= HEALTH ================= */
