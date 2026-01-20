@@ -1,211 +1,158 @@
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-import { createClient } from "@supabase/supabase-js";
+// LaunchSense Backend – Stable CommonJS Build
 
-dotenv.config();
+const express = require("express");
+const cors = require("cors");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+const crypto = require("crypto");
+require("dotenv").config();
+
+const { createClient } = require("@supabase/supabase-js");
+const { calculateRiskScore } = require("./decisionEngine");
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.disable("x-powered-by");
 
+/* ========== ENV CHECK ========== */
+["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach(k => {
+  if (!process.env[k]) {
+    console.error("Missing ENV:", k);
+    process.exit(1);
+  }
+});
+
+/* ========== CONFIG ========== */
+const CONFIG = {
+  PORT: process.env.PORT || 3000,
+  VERSION: "L5-BETA",
+  BASE_GO: 0.35,
+  BASE_KILL: 0.65
+};
+
+/* ========== CORE MIDDLEWARE ========== */
+app.use(helmet());
+app.use(cors());
+app.use(express.json({ limit: "300kb" }));
+
+/* ========== SUPABASE ========== */
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-/* ===============================
-   CORE ANALYSIS
-================================*/
-function analyzeGameplay(m) {
-  let fun = 0, retention = 0, difficulty = 0;
-  const signals = [];
+/* ========== TRACE LOGGER ========== */
+app.use((req, res, next) => {
+  req.request_id = crypto.randomUUID();
+  const start = Date.now();
 
-  if (m.avg_playtime < 8) {
-    retention += 30; signals.push("Low playtime");
-  }
-  if (m.early_quit_rate > 0.4) {
-    retention += 25; signals.push("High early quit");
-  }
-  if (m.avg_deaths > 5) {
-    difficulty += 25; signals.push("Difficulty spike");
-  }
-  if (m.restart_rate > 0.35) {
-    fun += 20; signals.push("Frustration detected");
-  }
+  res.on("finish", () => {
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      request_id: req.request_id,
+      path: req.originalUrl,
+      status: res.statusCode,
+      duration_ms: Date.now() - start
+    }));
+  });
 
-  const risk = Math.min(fun + retention + difficulty, 100);
+  next();
+});
 
-  let decision = "GO";
-  if (risk >= 40) decision = "ITERATE";
-  if (risk >= 70) decision = "KILL";
+/* ========== HELPERS ========== */
+const ok = (res, data) =>
+  res.json({ success: true, request_id: res.req.request_id, data });
 
-  const primary =
-    retention >= difficulty && retention >= fun
-      ? "retention"
-      : difficulty >= fun
-      ? "difficulty"
-      : "fun";
+const fail = (res, status, msg) =>
+  res.status(status).json({
+    success: false,
+    request_id: res.req.request_id,
+    error: msg
+  });
 
-  return { risk, decision, primary, signals };
-}
+/* ========== RATE LIMIT ========== */
+const sdkLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  keyGenerator: req => req.headers["x-api-key"] || req.ip
+});
 
-/* ===============================
-   CONFIDENCE
-================================*/
-function confidence(m) {
-  return Number(
-    Math.min(
-      (m.unique_players / 50 + m.total_sessions / 100) / 2,
-      1
-    ).toFixed(2)
-  );
-}
+/* ========== AUTH ========== */
+async function apiAuth(req, res, next) {
+  const apiKey = req.headers["x-api-key"];
+  const gameId = req.headers["x-game-id"];
 
-/* ===============================
-   TREND
-================================*/
-function trend(current, previous) {
-  if (previous === null) return { direction: "none", delta: 0 };
-  const delta = previous - current;
-
-  if (delta >= 10) return { direction: "strong_improvement", delta };
-  if (delta >= 3) return { direction: "mild_improvement", delta };
-  if (delta <= -3) return { direction: "degrading", delta };
-  return { direction: "stagnant", delta };
-}
-
-/* ===============================
-   PREDICTION (NEW)
-================================*/
-function predict(risk, trendDir) {
-  let next1 = risk;
-  let next2 = risk;
-
-  if (trendDir === "degrading") {
-    next1 += 8;
-    next2 += 15;
-  }
-  if (trendDir.includes("improvement")) {
-    next1 -= 6;
-    next2 -= 12;
-  }
-
-  return {
-    next_iteration: Math.min(next1, 100),
-    two_iterations: Math.min(next2, 100),
-  };
-}
-
-/* ===============================
-   KILL WARNING
-================================*/
-function killWarning(risk, prediction) {
-  if (risk >= 70) return "KILL_LOCK";
-  if (prediction.next_iteration >= 70) return "FINAL_WARNING";
-  if (prediction.next_iteration >= 60) return "WARNING";
-  return "NONE";
-}
-
-/* ===============================
-   SUGGESTIONS
-================================*/
-function suggestions(primary, warning) {
-  const s = [];
-
-  if (primary === "retention")
-    s.push("Improve onboarding", "Shorten early loop");
-  if (primary === "difficulty")
-    s.push("Reduce early difficulty", "Add checkpoints");
-  if (primary === "fun")
-    s.push("Improve feedback", "Reduce friction");
-
-  if (warning === "FINAL_WARNING")
-    s.unshift("⚠️ Last safe iteration remaining");
-
-  return s;
-}
-
-/* ===============================
-   ANALYZE ENDPOINT
-================================*/
-app.post("/analyze", async (req, res) => {
-  const { game_id } = req.body;
-  if (!game_id) return res.status(400).json({ error: "game_id required" });
-
-  const { data: last } = await supabase
-    .from("decisions")
-    .select("*")
-    .eq("game_id", game_id)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single();
-
-  if (last?.locked)
-    return res.status(403).json({ error: "Game permanently killed" });
+  if (!apiKey || !gameId)
+    return fail(res, 401, "Missing API credentials");
 
   const { data } = await supabase
-    .from("gameplay_metrics")
-    .select("*")
-    .eq("game_id", game_id);
+    .from("api_keys")
+    .select("id")
+    .eq("api_key", apiKey)
+    .eq("game_id", gameId)
+    .eq("revoked", false)
+    .maybeSingle();
 
-  if (!data?.length)
-    return res.status(404).json({ error: "No gameplay data" });
+  if (!data) return fail(res, 401, "Invalid API key");
 
-  const total_sessions = data.length;
-  const unique_players = new Set(data.map(d => d.player_id)).size;
+  req.game_id = gameId;
+  next();
+}
 
-  const metrics = {
-    avg_playtime: data.reduce((a, b) => a + b.playtime, 0) / total_sessions,
-    avg_deaths: data.reduce((a, b) => a + b.deaths, 0) / total_sessions,
-    restart_rate: data.filter(d => d.restarts > 0).length / total_sessions,
-    early_quit_rate: data.filter(d => d.early_quit).length / total_sessions,
-    total_sessions,
-    unique_players,
+/* ========== ROUTER ========== */
+const v1 = express.Router();
+app.use("/v1", v1);
+
+/* ========== PERSONA VIEW ========== */
+function personaView(decision, risk) {
+  return {
+    founder: `Risk ${Math.round(risk * 100)}%`,
+    designer: decision === "GO" ? "Healthy loop" : "Friction detected",
+    investor:
+      risk < 0.4 ? "Low risk" :
+      risk > 0.6 ? "High risk" :
+      "Moderate risk"
   };
+}
 
-  const a = analyzeGameplay(metrics);
-  const c = confidence(metrics);
-  const t = trend(a.risk, last?.risk_score ?? null);
-  const p = predict(a.risk, t.direction);
-  const w = killWarning(a.risk, p);
+/* ========== DECISION API ========== */
+v1.post("/sdk/decision", sdkLimiter, apiAuth, async (req, res) => {
+  try {
+    const risk = calculateRiskScore(req.body);
 
-  const locked = a.decision === "KILL";
+    let decision = "ITERATE";
+    if (risk < CONFIG.BASE_GO) decision = "GO";
+    if (risk > CONFIG.BASE_KILL) decision = "KILL";
 
-  await supabase.from("decisions").insert({
-    game_id,
-    risk_score: a.risk,
-    decision: a.decision,
-    confidence: c,
-    locked,
-  });
+    await supabase.from("decision_logs").insert({
+      game_id: req.game_id,
+      decision,
+      risk_score: Math.round(risk * 100),
+      sessions_count: req.body.sessions?.length || 0,
+      events_count: req.body.events?.length || 0
+    });
 
+    ok(res, {
+      decision,
+      risk_score: Math.round(risk * 100),
+      personas: personaView(decision, risk),
+      version: CONFIG.VERSION
+    });
+  } catch (e) {
+    console.error(e);
+    fail(res, 500, "Decision failed");
+  }
+});
+
+/* ========== HEALTH ========== */
+app.get("/health", (_, res) =>
   res.json({
-    game_id,
-    risk_score: a.risk,
-    decision: a.decision,
-    confidence: c,
-    trend: t,
-    prediction: p,
-    kill_warning: w,
-    explanation: {
-      primary_risk: a.primary,
-      signals: a.signals,
-    },
-    suggestions: suggestions(a.primary, w),
-    executive_summary: `Current risk is ${a.risk}. Trend is ${t.direction}. If no major fixes are applied, risk may reach ${p.next_iteration} in next iteration.`,
-    locked,
-  });
-});
-
-/* ===============================
-   HEALTH
-================================*/
-app.get("/", (_, res) => {
-  res.send("LaunchSense Backend v5 — Predictive System Live");
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log("LaunchSense backend running on", PORT)
+    status: "ok",
+    version: CONFIG.VERSION,
+    time: new Date().toISOString()
+  })
 );
+
+/* ========== START ========== */
+app.listen(CONFIG.PORT, () => {
+  console.log(`LaunchSense backend running on ${CONFIG.PORT}`);
+});
