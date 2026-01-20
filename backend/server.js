@@ -1,6 +1,6 @@
-// LaunchSense Backend — Batch 3
-// History + Trends + Insight APIs
-// Stable CommonJS build (Render safe)
+// LaunchSense Backend — Batch 4
+// Benchmarks + Industry Comparison + Confidence
+// Stable CommonJS | Render-safe
 
 const express = require("express");
 const cors = require("cors");
@@ -15,7 +15,7 @@ const { calculateRiskScore } = require("./decisionEngine");
 const app = express();
 app.disable("x-powered-by");
 
-/* ================= ENV CHECK ================= */
+/* ================= ENV ================= */
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach((k) => {
   if (!process.env[k]) {
     console.error("Missing ENV:", k);
@@ -26,12 +26,12 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L3-STABLE",
-  BASE_GO: 0.35,
-  BASE_KILL: 0.65,
+  VERSION: "L4-BENCHMARK",
+  GO: 0.35,
+  KILL: 0.65,
 };
 
-/* ================= CORE ================= */
+/* ================= MIDDLEWARE ================= */
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: "300kb" }));
@@ -50,15 +50,13 @@ app.use((req, res, next) => {
   res.on("finish", () => {
     console.log(
       JSON.stringify({
-        ts: new Date().toISOString(),
-        request_id: req.request_id,
+        id: req.request_id,
         path: req.originalUrl,
         status: res.statusCode,
-        duration_ms: Date.now() - start,
+        ms: Date.now() - start,
       })
     );
   });
-
   next();
 });
 
@@ -66,8 +64,8 @@ app.use((req, res, next) => {
 const ok = (res, data) =>
   res.json({ success: true, request_id: res.req.request_id, data });
 
-const fail = (res, status, msg) =>
-  res.status(status).json({
+const fail = (res, code, msg) =>
+  res.status(code).json({
     success: false,
     request_id: res.req.request_id,
     error: msg,
@@ -84,7 +82,6 @@ const sdkLimiter = rateLimit({
 async function apiAuth(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   const gameId = req.headers["x-game-id"];
-
   if (!apiKey || !gameId)
     return fail(res, 401, "Missing API credentials");
 
@@ -97,7 +94,6 @@ async function apiAuth(req, res, next) {
     .maybeSingle();
 
   if (!data) return fail(res, 401, "Invalid API key");
-
   req.game_id = gameId;
   next();
 }
@@ -106,56 +102,50 @@ async function apiAuth(req, res, next) {
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ================= PERSONA ================= */
-function personaView(decision, risk) {
-  return {
-    founder: `Risk ${Math.round(risk * 100)}%`,
-    designer:
-      decision === "GO"
-        ? "Healthy loop"
-        : decision === "KILL"
-        ? "Severe friction"
-        : "Iteration required",
-    investor:
-      risk < 0.4
-        ? "Low risk"
-        : risk > 0.6
-        ? "High risk"
-        : "Moderate risk",
-  };
-}
+/* ================= BENCHMARK ENGINE ================= */
+/*
+ Industry baseline (static for now, later dynamic):
+  - Top 25% games: avg risk ~30
+  - Median games: avg risk ~50
+  - Bottom 25%: avg risk ~70
+*/
 
-/* ================= EXPLANATION ================= */
-function explainDecision(decision) {
-  if (decision === "GO")
-    return "Players engage and improve across sessions.";
-  if (decision === "KILL")
-    return "Early churn dominates. Core loop fails.";
-  return "Mixed signals. Needs iteration.";
+function benchmarkPosition(risk) {
+  if (risk <= 30)
+    return { tier: "top_25_percent", confidence: "very_high" };
+  if (risk <= 45)
+    return { tier: "above_average", confidence: "high" };
+  if (risk <= 60)
+    return { tier: "average", confidence: "medium" };
+  if (risk <= 75)
+    return { tier: "below_average", confidence: "low" };
+  return { tier: "bottom_25_percent", confidence: "very_low" };
 }
 
 /* ================= DECISION ================= */
 v1.post("/sdk/decision", sdkLimiter, apiAuth, async (req, res) => {
   try {
     const risk = calculateRiskScore(req.body);
+    const riskPct = Math.round(risk * 100);
 
     let decision = "ITERATE";
-    if (risk < CONFIG.BASE_GO) decision = "GO";
-    if (risk > CONFIG.BASE_KILL) decision = "KILL";
+    if (risk < CONFIG.GO) decision = "GO";
+    if (risk > CONFIG.KILL) decision = "KILL";
+
+    const benchmark = benchmarkPosition(riskPct);
 
     await supabase.from("decision_logs").insert({
       game_id: req.game_id,
       decision,
-      risk_score: Math.round(risk * 100),
-      sessions_count: req.body.sessions?.length || 0,
-      events_count: req.body.events?.length || 0,
+      risk_score: riskPct,
+      benchmark_tier: benchmark.tier,
     });
 
     ok(res, {
       decision,
-      risk_score: Math.round(risk * 100),
-      personas: personaView(decision, risk),
-      explanation: explainDecision(decision),
+      risk_score: riskPct,
+      benchmark,
+      confidence_signal: benchmark.confidence,
       version: CONFIG.VERSION,
     });
   } catch (e) {
@@ -164,71 +154,32 @@ v1.post("/sdk/decision", sdkLimiter, apiAuth, async (req, res) => {
   }
 });
 
-/* ================= HISTORY ================= */
-v1.get("/history", apiAuth, async (req, res) => {
+/* ================= BENCHMARK API ================= */
+v1.get("/benchmark", apiAuth, async (req, res) => {
   const { data } = await supabase
     .from("decision_logs")
-    .select("decision,risk_score,created_at")
-    .eq("game_id", req.game_id)
-    .order("created_at", { ascending: false })
-    .limit(20);
-
-  ok(res, data || []);
-});
-
-/* ================= TRENDS ================= */
-v1.get("/trends", apiAuth, async (req, res) => {
-  const { data } = await supabase
-    .from("decision_logs")
-    .select("risk_score,created_at")
-    .eq("game_id", req.game_id)
-    .order("created_at", { ascending: true })
-    .limit(50);
-
-  if (!data || data.length < 2)
-    return ok(res, { trend: "insufficient_data" });
-
-  const first = data[0].risk_score;
-  const last = data[data.length - 1].risk_score;
-
-  let trend = "stable";
-  if (last < first - 5) trend = "improving";
-  if (last > first + 5) trend = "degrading";
-
-  ok(res, {
-    trend,
-    first_risk: first,
-    last_risk: last,
-    samples: data.length,
-  });
-});
-
-/* ================= INSIGHT ================= */
-v1.get("/insight", apiAuth, async (req, res) => {
-  const { data } = await supabase
-    .from("decision_logs")
-    .select("decision,risk_score")
+    .select("risk_score")
     .eq("game_id", req.game_id)
     .order("created_at", { ascending: false })
     .limit(10);
 
   if (!data || data.length === 0)
-    return ok(res, { message: "No insights yet" });
+    return ok(res, { message: "No benchmark data yet" });
 
   const avg =
     data.reduce((a, b) => a + b.risk_score, 0) / data.length;
 
-  let insight =
-    avg < 40
-      ? "Game shows healthy early signals."
-      : avg > 60
-      ? "Game repeatedly shows high risk."
-      : "Game is unstable — iteration advised.";
+  const benchmark = benchmarkPosition(avg);
 
   ok(res, {
     average_risk: Math.round(avg),
-    insight,
-    samples: data.length,
+    benchmark,
+    industry_message:
+      benchmark.tier === "top_25_percent"
+        ? "Your game outperforms most launches."
+        : benchmark.tier === "bottom_25_percent"
+        ? "Your game underperforms industry baseline."
+        : "Your game is close to industry average.",
   });
 });
 
