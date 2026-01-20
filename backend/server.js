@@ -1,4 +1,4 @@
-// LaunchSense Backend — Batch 4 (Aggregation & Trends)
+// LaunchSense Backend — Batch 5 (Persona APIs)
 
 const express = require("express");
 const cors = require("cors");
@@ -23,7 +23,7 @@ app.disable("x-powered-by");
 /* ================= CONFIG ================= */
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "1.3-BATCH4"
+  VERSION: "1.4-BATCH5"
 };
 
 /* ================= CORE ================= */
@@ -108,85 +108,115 @@ async function apiAuth(req, res, next) {
 const v1 = express.Router();
 app.use("/v1", v1);
 
-/* ================= OVERVIEW ================= */
+/* ================= PERSONA: FOUNDER ================= */
 v1.get(
-  "/analytics/overview",
+  "/persona/founder",
   readLimiter,
   apiAuth,
   async (req, res) => {
-    try {
-      const { data: decisions } = await supabase
-        .from("risk_decisions")
-        .select("risk_score, decision, signals")
-        .eq("game_id", req.game_id);
+    const { data } = await supabase
+      .from("risk_decisions")
+      .select("risk_score, decision")
+      .eq("game_id", req.game_id);
 
-      if (!decisions || decisions.length === 0)
-        return ok(res, { message: "No data yet" });
+    if (!data || data.length === 0)
+      return ok(res, { message: "No data yet" });
 
-      let totalRisk = 0;
-      let go = 0, iterate = 0, kill = 0;
-      let earlyExit = 0;
-      let totalEngagement = 0;
-      let totalDeathsRate = 0;
+    let go = 0, iterate = 0, kill = 0;
+    let avgRisk = 0;
 
-      decisions.forEach(d => {
-        totalRisk += d.risk_score;
+    data.forEach(d => {
+      avgRisk += d.risk_score;
+      if (d.decision === "GO") go++;
+      if (d.decision === "ITERATE") iterate++;
+      if (d.decision === "KILL") kill++;
+    });
 
-        if (d.decision === "GO") go++;
-        if (d.decision === "ITERATE") iterate++;
-        if (d.decision === "KILL") kill++;
+    avgRisk /= data.length;
 
-        if (d.signals?.early_exit) earlyExit++;
-        totalEngagement += d.signals?.engagement_score || 0;
-        totalDeathsRate += d.signals?.deaths_per_minute || 0;
-      });
-
-      const count = decisions.length;
-
-      ok(res, {
-        sessions: count,
-        avg_risk: Number((totalRisk / count).toFixed(2)),
-        decisions: { go, iterate, kill },
-        early_exit_rate: Number((earlyExit / count).toFixed(2)),
-        avg_engagement: Number((totalEngagement / count).toFixed(2)),
-        avg_deaths_per_minute: Number((totalDeathsRate / count).toFixed(2))
-      });
-
-    } catch (e) {
-      log("error", "overview_failed", { error: e.message });
-      fail(res, 500, "Overview analytics failed");
-    }
+    ok(res, {
+      sessions: data.length,
+      avg_risk: Number(avgRisk.toFixed(2)),
+      decision_bias: { go, iterate, kill },
+      verdict:
+        avgRisk < 0.4
+          ? "Healthy trajectory"
+          : avgRisk > 0.65
+          ? "High risk — reconsider investment"
+          : "Needs iteration"
+    });
   }
 );
 
-/* ================= TRENDS ================= */
+/* ================= PERSONA: DESIGNER ================= */
 v1.get(
-  "/analytics/trends",
+  "/persona/designer",
   readLimiter,
   apiAuth,
   async (req, res) => {
-    try {
-      const { data } = await supabase
-        .from("risk_decisions")
-        .select("risk_score, decision, created_at")
-        .eq("game_id", req.game_id)
-        .order("created_at", { ascending: true });
+    const { data } = await supabase
+      .from("session_signals")
+      .select("*")
+      .eq("game_id", req.game_id);
 
-      if (!data || data.length === 0)
-        return ok(res, { message: "No trend data yet" });
+    if (!data || data.length === 0)
+      return ok(res, { message: "No data yet" });
 
-      const timeline = data.map(d => ({
-        date: d.created_at,
-        risk: d.risk_score,
-        decision: d.decision
-      }));
+    const friction = data.filter(s => s.early_exit).length;
+    const avgDeaths =
+      data.reduce((a, b) => a + (b.deaths_per_minute || 0), 0) /
+      data.length;
 
-      ok(res, { timeline });
+    const avgEngagement =
+      data.reduce((a, b) => a + (b.engagement_score || 0), 0) /
+      data.length;
 
-    } catch (e) {
-      log("error", "trends_failed", { error: e.message });
-      fail(res, 500, "Trend analytics failed");
-    }
+    ok(res, {
+      sessions: data.length,
+      early_exit_sessions: friction,
+      avg_deaths_per_minute: Number(avgDeaths.toFixed(2)),
+      avg_engagement: Number(avgEngagement.toFixed(2)),
+      focus_hint:
+        friction / data.length > 0.4
+          ? "Players quitting early — tutorial or difficulty issue"
+          : "Core loop mostly engaging"
+    });
+  }
+);
+
+/* ================= PERSONA: INVESTOR ================= */
+v1.get(
+  "/persona/investor",
+  readLimiter,
+  apiAuth,
+  async (req, res) => {
+    const { data } = await supabase
+      .from("risk_decisions")
+      .select("risk_score, decision")
+      .eq("game_id", req.game_id);
+
+    if (!data || data.length === 0)
+      return ok(res, { message: "No data yet" });
+
+    const kills = data.filter(d => d.decision === "KILL").length;
+    const avgRisk =
+      data.reduce((a, b) => a + b.risk_score, 0) / data.length;
+
+    const confidence = Math.max(
+      0,
+      1 - Math.abs(avgRisk - 0.5) * 2
+    );
+
+    ok(res, {
+      sessions: data.length,
+      kill_ratio: Number((kills / data.length).toFixed(2)),
+      avg_risk: Number(avgRisk.toFixed(2)),
+      confidence_score: Number(confidence.toFixed(2)),
+      investor_signal:
+        confidence > 0.7
+          ? "Consistent data — monitor closely"
+          : "Volatile signals — high uncertainty"
+    });
   }
 );
 
