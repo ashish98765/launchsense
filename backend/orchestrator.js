@@ -1,7 +1,7 @@
 /**
  * orchestrator.js
- * Batch-2: Temporal Intelligence
- * DB Rules > Model (fallback)
+ * Batch-3: Comparative Intelligence
+ * DB Rules > Model > Trend > Cohort
  */
 
 const { decisionSchema } = require("./validator");
@@ -9,13 +9,16 @@ const { calculateDecision } = require("./decisionEngine");
 const { extractInsights } = require("./insightEngine");
 const { buildLedgerEntry } = require("./ledger");
 
-// Batch-1
+// Batch 1
 const { classifySignals } = require("./signalClassifier");
 const { calculateConfidence } = require("./confidenceEngine");
 const { buildReason } = require("./reasonBuilder");
 
-// Batch-2
+// Batch 2
 const { analyzeTrend } = require("./temporalIntelligence");
+
+// Batch 3
+const { compareWithCohort } = require("./cohortEngine");
 
 // ---------------- RULE HELPERS ----------------
 
@@ -75,10 +78,10 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
     restarts: input.restarts || 0
   };
 
-  // 4️⃣ Signals (Batch-1)
+  // 4️⃣ Signals
   const signals = classifySignals(metrics);
 
-  // 5️⃣ Trend (Batch-2)
+  // 5️⃣ Trend
   const trend = analyzeTrend(history);
 
   // 6️⃣ Rules (authoritative)
@@ -94,7 +97,7 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
 
     const reason =
       buildReason(signals, ruleHit.decision) +
-      ` Trend: ${trend.direction} (${trend.strength})`;
+      ` Trend: ${trend.direction}`;
 
     return {
       ok: true,
@@ -107,7 +110,7 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
     };
   }
 
-  // 8️⃣ Model fallback
+  // 8️⃣ Model decision
   const decisionResult = calculateDecision({
     early_quit_rate: metrics.early_quit,
     avg_session_time: metrics.playtime,
@@ -115,14 +118,24 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
     restart_rate: metrics.restarts
   });
 
+  // 9️⃣ Cohort comparison (Batch-3)
+  const cohort = compareWithCohort(
+    { risk_score: decisionResult.riskScore },
+    history
+  );
+
   const confidence = calculateConfidence({
     signals,
     source: "MODEL"
   });
 
-  const reason =
+  let reason =
     buildReason(signals, decisionResult.decision) +
-    ` Trend: ${trend.direction} (${trend.strength})`;
+    ` Trend: ${trend.direction}`;
+
+  if (cohort.relative_risk !== null) {
+    reason += ` Compared to past launches: ${cohort.comparison}`;
+  }
 
   const ledger = buildLedgerEntry({
     game_id: input.game_id,
@@ -131,6 +144,7 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
     confidence,
     signals,
     trend,
+    cohort,
     input
   });
 
@@ -141,6 +155,7 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
     confidence,
     signals,
     trend,
+    cohort,
     reason,
     insights,
     ledger,
