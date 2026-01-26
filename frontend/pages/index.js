@@ -1,318 +1,185 @@
+// frontend/pages/index.js
+
+import MainLayout from "../components/layout/MainLayout";
+import Link from "next/link";
+
 export default function Home() {
   return (
-    <div style={styles.page}>
-      {/* NAVBAR */}
-      <header style={styles.nav}>
-        <div style={styles.navInner}>
-          <div style={styles.logo}>LaunchSense</div>
-          <nav style={styles.navLinks}>
-            <a href="#product">Product</a>
-            <a href="#example">Example</a>
-            <a href="#pricing">Pricing</a>
-            <a href="/signup" style={styles.navCta}>Analyze a Build</a>
-          </nav>
-        </div>
-      </header>
-
+    <MainLayout
+      title="LaunchSense – Decision clarity for games & behavior-driven products"
+      description="Detect early risk signals in gameplay and product behavior before launch decisions are locked."
+    >
       {/* HERO */}
-      <section style={styles.hero}>
-        <h1 style={styles.h1}>
-          Most games don’t fail at launch.
-          <span style={styles.h1Accent}>
+      <section className="max-w-5xl mx-auto px-6 py-28 text-center">
+        <h1 className="text-4xl md:text-5xl font-semibold tracking-tight">
+          Most products don’t fail at launch.
+          <br />
+          <span className="text-primary">
             They fail quietly in the first few minutes.
           </span>
         </h1>
 
-        <p style={styles.heroText}>
-          LaunchSense analyzes early gameplay behaviour from test builds
-          and exposes risk patterns — so teams decide <b>before</b> months
-          of development are committed.
+        <p className="mt-6 text-lg text-muted-foreground max-w-2xl mx-auto">
+          LaunchSense analyzes early gameplay and product behavior from test
+          builds to surface hidden risk patterns — before months of development
+          are committed.
         </p>
 
-        <div style={styles.heroActions}>
-          <a href="/signup" style={styles.primaryBtn}>
+        <div className="mt-10 flex justify-center gap-4 flex-wrap">
+          <Link
+            href="/signup"
+            className="px-6 py-3 rounded-md bg-primary text-primary-foreground font-medium"
+          >
             Analyze a test build
-          </a>
-          <a href="#example" style={styles.secondaryBtn}>
-            View example output →
-          </a>
+          </Link>
+
+          <Link
+            href="/example"
+            className="px-6 py-3 rounded-md border border-border text-foreground"
+          >
+            View example output
+          </Link>
         </div>
       </section>
 
-      {/* EXAMPLE */}
-      <section id="example" style={styles.sectionAlt}>
-        <h2 style={styles.h2}>Example: early risk signal</h2>
+      {/* EXAMPLE SIGNAL */}
+      <section className="bg-muted/40 py-24 px-6">
+        <div className="max-w-4xl mx-auto">
+          <h2 className="text-2xl font-medium mb-6">
+            Example: Early risk signal
+          </h2>
 
-        <div style={styles.card}>
-          <div style={styles.cardHeader}>
-            <span style={styles.riskHigh}>HIGH RISK</span>
-            <span style={styles.confidence}>Confidence: Medium</span>
+          <div className="rounded-lg border border-border bg-card p-6 space-y-4">
+            <div className="flex justify-between text-sm">
+              <span className="text-red-600 font-medium">HIGH RISK</span>
+              <span className="text-muted-foreground">
+                Confidence: Medium
+              </span>
+            </div>
+
+            <ul className="list-disc pl-5 text-sm text-muted-foreground space-y-1">
+              <li>67% of players quit before 3 minutes</li>
+              <li>Death spikes before tutorial completion</li>
+              <li>No session-to-session improvement</li>
+            </ul>
+
+            <p className="text-sm text-muted-foreground pt-2">
+              Interpretation: Core gameplay loop friction detected. Iteration
+              recommended before scaling production.
+            </p>
           </div>
-
-          <ul style={styles.list}>
-            <li>67% of players quit before 3 minutes</li>
-            <li>Death spikes before tutorial completion</li>
-            <li>No session-to-session improvement</li>
-          </ul>
-
-          <p style={styles.cardNote}>
-            Interpretation: core gameplay loop friction detected.
-            Iteration recommended before scaling production.
-          </p>
         </div>
       </section>
 
       {/* WHAT IT DETECTS */}
-      <section id="product" style={styles.section}>
-        <h2 style={styles.h2}>What LaunchSense detects</h2>
+      <section className="py-24 px-6">
+        <div className="max-w-5xl mx-auto">
+          <h2 className="text-2xl font-medium mb-10">
+            What LaunchSense detects
+          </h2>
 
-        <div style={styles.grid}>
-          <div style={styles.miniCard}>
-            <h3>Early abandonment</h3>
-            <p>Players exiting before engagement stabilizes.</p>
-          </div>
-
-          <div style={styles.miniCard}>
-            <h3>Difficulty spikes</h3>
-            <p>Deaths, restarts, and frustration signals.</p>
-          </div>
-
-          <div style={styles.miniCard}>
-            <h3>False engagement</h3>
-            <p>Playtime that hides confusion, not fun.</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {[
+              {
+                title: "Early abandonment",
+                desc: "Players exiting before engagement stabilizes.",
+              },
+              {
+                title: "Difficulty spikes",
+                desc: "Deaths, restarts, and frustration signals.",
+              },
+              {
+                title: "False engagement",
+                desc: "Playtime that hides confusion, not fun.",
+              },
+            ].map((item) => (
+              <div
+                key={item.title}
+                className="rounded-lg border border-border p-5 bg-card"
+              >
+                <h3 className="font-medium">{item.title}</h3>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {item.desc}
+                </p>
+              </div>
+            ))}
           </div>
         </div>
       </section>
 
-      {/* WHO IT'S FOR */}
-      <section style={styles.sectionAlt}>
-        <h2 style={styles.h2}>Who this is for</h2>
+      {/* WHO IT’S FOR */}
+      <section className="bg-muted/40 py-24 px-6">
+        <div className="max-w-5xl mx-auto">
+          <h2 className="text-2xl font-medium mb-10">
+            Who this is for
+          </h2>
 
-        <div style={styles.split}>
-          <div>
-            <h4>Good fit</h4>
-            <ul style={styles.list}>
-              <li>Indie & small studios validating ideas</li>
-              <li>Teams before full production</li>
-              <li>Mobile & PC playtests</li>
-            </ul>
-          </div>
+          <div className="grid md:grid-cols-2 gap-8">
+            <div>
+              <h4 className="font-medium mb-3">Good fit</h4>
+              <ul className="list-disc pl-5 text-sm text-muted-foreground space-y-1">
+                <li>Indie & small studios validating ideas</li>
+                <li>Teams before full production</li>
+                <li>Mobile & PC playtests</li>
+              </ul>
+            </div>
 
-          <div>
-            <h4>Not for</h4>
-            <ul style={styles.listMuted}>
-              <li>Live, shipped games</li>
-              <li>Marketing analytics</li>
-              <li>Guaranteed success prediction</li>
-            </ul>
+            <div>
+              <h4 className="font-medium mb-3">Not for</h4>
+              <ul className="list-disc pl-5 text-sm text-muted-foreground space-y-1">
+                <li>Live shipped games</li>
+                <li>Marketing analytics</li>
+                <li>Guaranteed success predictions</li>
+              </ul>
+            </div>
           </div>
         </div>
       </section>
 
       {/* HOW IT WORKS */}
-      <section style={styles.section}>
-        <h2 style={styles.h2}>How teams use LaunchSense</h2>
-        <ol style={styles.steps}>
-          <li>Run a closed playtest</li>
-          <li>Send session data to LaunchSense</li>
-          <li>Review detected risk signals</li>
-          <li>
-            <b>Decide to iterate, pause, or rethink — early</b>
-          </li>
-        </ol>
+      <section className="py-24 px-6">
+        <div className="max-w-4xl mx-auto">
+          <h2 className="text-2xl font-medium mb-8">
+            How teams use LaunchSense
+          </h2>
+
+          <ol className="list-decimal pl-5 text-sm text-muted-foreground space-y-2">
+            <li>Run a closed playtest</li>
+            <li>Send session data to LaunchSense</li>
+            <li>Review detected risk signals</li>
+            <li>
+              <strong>
+                Decide to iterate, pause, or rethink — early
+              </strong>
+            </li>
+          </ol>
+        </div>
       </section>
 
       {/* PRICING */}
-      <section id="pricing" style={styles.sectionAlt}>
-        <h2 style={styles.h2}>Simple pricing</h2>
-        <p style={styles.text}>
+      <section className="bg-muted/40 py-24 px-6 text-center">
+        <h2 className="text-2xl font-medium mb-4">
+          Simple pricing
+        </h2>
+
+        <p className="text-muted-foreground mb-8">
           Start free. Upgrade when deeper analysis is required.
           <br />
           No long-term contracts. No forced decisions.
         </p>
 
-        <a href="/signup" style={styles.primaryBtnLarge}>
+        <Link
+          href="/signup"
+          className="inline-block px-6 py-3 rounded-md bg-primary text-primary-foreground font-medium"
+        >
           Try LaunchSense on a test build
-        </a>
+        </Link>
       </section>
 
-      {/* FOOTER */}
-      <footer style={styles.footer}>
-        <div style={styles.footerLinks}>
-          <a href="/methodology">Methodology</a>
-          <a href="/sdk">SDK</a>
-          <a href="/pricing">Pricing</a>
-        </div>
-        <p style={styles.footerNote}>
-          LaunchSense highlights risk. Final decisions always stay with you.
-        </p>
+      {/* FOOTNOTE */}
+      <footer className="py-10 text-center text-sm text-muted-foreground">
+        LaunchSense highlights risk. Final decisions always stay with you.
       </footer>
-    </div>
+    </MainLayout>
   );
 }
-
-/* ---------- STYLES ---------- */
-
-const styles = {
-  page: {
-    fontFamily: "system-ui, -apple-system, sans-serif",
-    background: "#F9FAFB",
-    color: "#0F172A",
-  },
-
-  nav: {
-    position: "sticky",
-    top: 0,
-    background: "#ffffff",
-    borderBottom: "1px solid #E5E7EB",
-    zIndex: 10,
-  },
-  navInner: {
-    maxWidth: 1100,
-    margin: "0 auto",
-    padding: "16px 20px",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  logo: { fontWeight: 700, fontSize: 18 },
-  navLinks: { display: "flex", gap: 20, alignItems: "center" },
-  navCta: {
-    padding: "8px 14px",
-    background: "#2563EB",
-    color: "#fff",
-    borderRadius: 8,
-    textDecoration: "none",
-    fontWeight: 600,
-  },
-
-  hero: {
-    maxWidth: 900,
-    margin: "0 auto",
-    padding: "90px 20px",
-  },
-  h1: {
-    fontSize: 44,
-    lineHeight: 1.15,
-    marginBottom: 20,
-  },
-  h1Accent: {
-    display: "block",
-    color: "#64748B",
-    marginTop: 6,
-  },
-  heroText: {
-    fontSize: 18,
-    color: "#475569",
-    maxWidth: 720,
-  },
-  heroActions: {
-    marginTop: 32,
-    display: "flex",
-    gap: 16,
-    flexWrap: "wrap",
-  },
-
-  primaryBtn: {
-    background: "#2563EB",
-    color: "#fff",
-    padding: "14px 24px",
-    borderRadius: 12,
-    textDecoration: "none",
-    fontWeight: 600,
-  },
-  secondaryBtn: {
-    color: "#2563EB",
-    textDecoration: "none",
-    fontWeight: 600,
-    padding: "14px 10px",
-  },
-
-  section: {
-    maxWidth: 1000,
-    margin: "0 auto",
-    padding: "80px 20px",
-  },
-  sectionAlt: {
-    background: "#F1F5F9",
-    padding: "80px 20px",
-  },
-
-  h2: { fontSize: 28, marginBottom: 28 },
-
-  card: {
-    maxWidth: 540,
-    background: "#ffffff",
-    border: "1px solid #E5E7EB",
-    borderRadius: 18,
-    padding: 24,
-  },
-  cardHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    marginBottom: 12,
-  },
-  riskHigh: {
-    color: "#D97706",
-    fontWeight: 700,
-  },
-  confidence: {
-    color: "#64748B",
-  },
-
-  list: { paddingLeft: 20 },
-  listMuted: { paddingLeft: 20, color: "#64748B" },
-  cardNote: {
-    marginTop: 12,
-    fontSize: 14,
-    color: "#64748B",
-  },
-
-  grid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-    gap: 20,
-  },
-  miniCard: {
-    background: "#ffffff",
-    border: "1px solid #E5E7EB",
-    borderRadius: 16,
-    padding: 20,
-  },
-
-  split: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 40,
-  },
-
-  steps: { paddingLeft: 20, fontSize: 16 },
-
-  text: { color: "#475569", marginBottom: 24 },
-
-  primaryBtnLarge: {
-    display: "inline-block",
-    background: "#2563EB",
-    color: "#fff",
-    padding: "16px 30px",
-    borderRadius: 14,
-    textDecoration: "none",
-    fontWeight: 700,
-  },
-
-  footer: {
-    borderTop: "1px solid #E5E7EB",
-    padding: "40px 20px",
-    textAlign: "center",
-  },
-  footerLinks: {
-    display: "flex",
-    gap: 16,
-    justifyContent: "center",
-  },
-  footerNote: {
-    marginTop: 12,
-    color: "#64748B",
-    fontSize: 14,
-  },
-};
