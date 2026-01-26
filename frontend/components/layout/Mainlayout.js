@@ -1,22 +1,29 @@
-// frontend/components/layout/MainLayout.js
-
 import Head from "next/head";
+import Header from "../common/Header";
+import Footer from "../common/Footer";
 
-export default function MainLayout({ 
-  title = "LaunchSense",
-  description = "Decision clarity for behavior-driven products",
-  children 
+export default function MainLayout({
+  children,
+  title,
+  description,
 }) {
   return (
     <>
       <Head>
-        <title>{title}</title>
-        <meta name="description" content={description} />
+        <title>{title || "LaunchSense"}</title>
+        <meta
+          name="description"
+          content={description || "Decision clarity before launch"}
+        />
       </Head>
 
-      <div className="min-h-screen bg-background text-foreground">
+      <Header />
+
+      <main className="min-h-screen bg-background text-foreground">
         {children}
-      </div>
+      </main>
+
+      <Footer />
     </>
   );
 }
