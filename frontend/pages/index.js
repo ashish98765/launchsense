@@ -1,39 +1,39 @@
-import Link from "next/link";
 import MainLayout from "../components/layout/MainLayout";
+import Link from "next/link";
 
 export default function Home() {
   return (
     <MainLayout
-      title="LaunchSense – Decision clarity for games & behavior-driven products"
+      title="LaunchSense — Decision clarity for games & behavior-driven products"
       description="Detect early risk signals in gameplay and product behavior before launch decisions are locked."
     >
       {/* HERO */}
-      <section className="max-w-5xl mx-auto px-6 py-28 text-center">
-        <h1 className="text-4xl md:text-5xl font-semibold tracking-tight">
+      <section className="max-w-5xl mx-auto px-6 pt-32 pb-24 text-center">
+        <h1 className="text-4xl md:text-6xl font-semibold tracking-tight leading-tight">
           Most products don’t fail at launch.
           <br />
-          <span className="text-muted-foreground">
+          <span className="text-primary">
             They fail quietly in the first few minutes.
           </span>
         </h1>
 
-        <p className="mt-6 text-lg text-muted-foreground max-w-2xl mx-auto">
+        <p className="mt-8 text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">
           LaunchSense analyzes early gameplay and product behavior from test
           builds to surface hidden risk patterns — before months of development
           are committed.
         </p>
 
-        <div className="mt-10 flex flex-col items-center gap-3">
+        <div className="mt-12 flex flex-col items-center gap-4">
           <Link
             href="/signup"
-            className="px-7 py-3 rounded-md bg-primary text-primary-foreground font-medium shadow-lg"
+            className="px-8 py-3 rounded-md bg-primary text-primary-foreground font-medium shadow-md hover:shadow-lg transition"
           >
             Analyze a test build
           </Link>
 
           <Link
             href="/example"
-            className="text-sm text-muted-foreground hover:text-foreground"
+            className="text-sm text-muted-foreground hover:text-foreground transition"
           >
             View example output →
           </Link>
@@ -41,17 +41,15 @@ export default function Home() {
       </section>
 
       {/* EXAMPLE SIGNAL */}
-      <section className="bg-muted/40 py-24 px-6">
-        <div className="max-w-3xl mx-auto">
-          <h2 className="text-2xl font-medium mb-8">
+      <section className="bg-muted/40 py-28 px-6">
+        <div className="max-w-4xl mx-auto">
+          <h2 className="text-2xl font-medium mb-6">
             Example: early risk signal
           </h2>
 
-          <div className="rounded-lg border border-border bg-card p-6 space-y-4">
+          <div className="rounded-xl border border-border bg-card p-7 space-y-4 shadow-sm">
             <div className="flex justify-between text-sm">
-              <span className="font-medium text-destructive">
-                HIGH RISK
-              </span>
+              <span className="font-semibold text-red-600">HIGH RISK</span>
               <span className="text-muted-foreground">
                 Confidence: Medium
               </span>
@@ -64,15 +62,15 @@ export default function Home() {
             </ul>
 
             <p className="text-sm text-muted-foreground pt-2">
-              Interpretation: Core gameplay loop friction detected.
-              Iteration recommended before scaling production.
+              Interpretation: Core gameplay loop friction detected. Iteration
+              recommended before scaling production.
             </p>
           </div>
         </div>
       </section>
 
       {/* WHAT IT DETECTS */}
-      <section className="py-24 px-6">
+      <section className="py-28 px-6">
         <div className="max-w-5xl mx-auto">
           <h2 className="text-2xl font-medium mb-10">
             What LaunchSense detects
@@ -95,7 +93,7 @@ export default function Home() {
             ].map((item) => (
               <div
                 key={item.title}
-                className="rounded-lg border border-border p-6 bg-card"
+                className="rounded-xl border border-border bg-card p-7 shadow-sm"
               >
                 <h3 className="font-medium">{item.title}</h3>
                 <p className="mt-2 text-sm text-muted-foreground">
@@ -108,15 +106,13 @@ export default function Home() {
       </section>
 
       {/* WHO IT’S FOR */}
-      <section className="bg-muted/40 py-24 px-6">
+      <section className="bg-muted/40 py-28 px-6">
         <div className="max-w-5xl mx-auto">
-          <h2 className="text-2xl font-medium mb-10">
-            Who this is for
-          </h2>
+          <h2 className="text-2xl font-medium mb-10">Who this is for</h2>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+          <div className="grid md:grid-cols-2 gap-10">
             <div>
-              <h3 className="font-medium mb-3">Good fit</h3>
+              <h4 className="font-medium mb-3">Good fit</h4>
               <ul className="list-disc pl-5 text-sm text-muted-foreground space-y-1">
                 <li>Indie & small studios validating ideas</li>
                 <li>Teams before full production</li>
@@ -125,7 +121,7 @@ export default function Home() {
             </div>
 
             <div>
-              <h3 className="font-medium mb-3">Not for</h3>
+              <h4 className="font-medium mb-3">Not for</h4>
               <ul className="list-disc pl-5 text-sm text-muted-foreground space-y-1">
                 <li>Live, shipped games</li>
                 <li>Marketing analytics</li>
@@ -137,7 +133,7 @@ export default function Home() {
       </section>
 
       {/* HOW IT WORKS */}
-      <section className="py-24 px-6">
+      <section className="py-28 px-6">
         <div className="max-w-4xl mx-auto">
           <h2 className="text-2xl font-medium mb-8">
             How teams use LaunchSense
@@ -156,32 +152,26 @@ export default function Home() {
         </div>
       </section>
 
-      {/* PRICING CTA */}
-      <section className="bg-muted/40 py-24 px-6 text-center">
-        <h2 className="text-2xl font-medium mb-4">
-          Simple pricing
-        </h2>
-
-        <p className="text-muted-foreground mb-8 max-w-xl mx-auto">
-          Used during playtests to surface early risk —
-          not to predict success, not to replace judgment.
+      {/* PRICING */}
+      <section className="bg-muted/40 py-28 px-6 text-center">
+        <h2 className="text-2xl font-medium mb-4">Simple pricing</h2>
+        <p className="text-muted-foreground mb-8">
+          Start free. Upgrade when deeper analysis is required.
           <br />
-          Clear signals. Calm decisions.
+          No long-term contracts. No forced decisions.
         </p>
 
         <Link
           href="/signup"
-          className="inline-block px-7 py-3 rounded-md bg-primary text-primary-foreground font-medium"
+          className="inline-block px-8 py-3 rounded-md bg-primary text-primary-foreground font-medium shadow-md hover:shadow-lg transition"
         >
           Try LaunchSense on a test build
         </Link>
       </section>
 
       {/* FOOTER NOTE */}
-      <footer className="py-10 text-center text-sm text-muted-foreground">
-        No alerts. No urgency manufacturing.
-        <br />
-        Just early clarity when it matters.
+      <footer className="py-16 text-center text-sm text-muted-foreground leading-relaxed">
+        LaunchSense highlights risk. Final decisions always stay with you.
       </footer>
     </MainLayout>
   );
