@@ -21,9 +21,6 @@ const {
   trackDecision
 } = require("./observability");
 
-// Dashboard routes
-const dashboardRoutes = require("./routes/dashboard");
-
 // ───────────────── ENV CHECK ─────────────────
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach((k) => {
   if (!process.env[k]) {
@@ -46,7 +43,6 @@ const CONFIG = {
 app.use(helmet());
 app.use(cors());
 
-// 🔐 Payload hard-limit (ANTI-ABUSE)
 app.use(
   express.json({
     limit: "100kb",
@@ -57,7 +53,7 @@ app.use(
 // Observability (safe)
 app.use(observabilityMiddleware);
 
-// Global rate limit (coarse)
+// Global coarse rate limit
 app.use(
   rateLimit({
     windowMs: 60 * 1000,
@@ -124,10 +120,10 @@ async function apiAuth(req, res, next) {
 const v1 = express.Router();
 app.use("/v1", v1);
 
-// ───────────────── DECISION RATE LIMIT ─────────────────
+// Per-game decision rate limit
 const decisionLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 30, // per game per minute
+  max: 30,
   standardHeaders: true,
   legacyHeaders: false
 });
@@ -147,17 +143,23 @@ v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
       events: req.body.events || []
     };
 
-    // Load recent history (safe)
-    const { data: history } = await supabase
+    // Load recent history
+    const { data: history, error } = await supabase
       .from("decision_logs")
       .select("risk_score")
       .eq("game_id", req.game_id)
-      .order("created_at", { ascending: true })
+      .order("created_at", { ascending: false })
       .limit(20);
+
+    if (error) {
+      console.error(error);
+      return fail(res, 500, "Failed to load decision history");
+    }
 
     const result = await runDecisionPipeline({
       input,
-      history: history || []
+      history: history || [],
+      supabase
     });
 
     if (!result.ok) {
@@ -185,11 +187,10 @@ v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
 
     trackDecision(result.decision);
     return ok(res, result);
-
   } catch (e) {
     console.error("❌ Decision pipeline error:", e);
 
-    // 🛟 FAIL-SAFE RESPONSE (MOST IMPORTANT)
+    // FAIL-SAFE RESPONSE (MOST IMPORTANT)
     return ok(res, {
       decision: "ITERATE",
       risk_score: 50,
@@ -198,9 +199,6 @@ v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
     });
   }
 });
-
-// ───────────────── DASHBOARD (READ-ONLY) ─────────────────
-v1.use("/dashboard", apiAuth, dashboardRoutes({ supabase }));
 
 // ───────────────── EXPORTS ─────────────────
 v1.get("/export/decisions", apiAuth, async (req, res) => {
@@ -216,13 +214,18 @@ v1.get("/export/decisions", apiAuth, async (req, res) => {
     }
 
     const parser = new Parser({
-      fields: ["created_at", "build_version", "decision", "risk_score", "trend"]
+      fields: [
+        "created_at",
+        "build_version",
+        "decision",
+        "risk_score",
+        "trend"
+      ]
     });
 
     res.header("Content-Type", "text/csv");
     res.attachment(`launchsense-decisions-${req.game_id}.csv`);
     res.send(parser.parse(data));
-
   } catch (e) {
     console.error(e);
     fail(res, 500, "CSV export failed");
@@ -240,5 +243,7 @@ app.get("/health", (_, res) => {
 
 // ───────────────── START ─────────────────
 app.listen(CONFIG.PORT, () => {
-  console.log(`🚀 LaunchSense ${CONFIG.VERSION} running on ${CONFIG.PORT}`);
+  console.log(
+    `🚀 LaunchSense ${CONFIG.VERSION} running on ${CONFIG.PORT}`
+  );
 });
