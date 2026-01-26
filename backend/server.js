@@ -1,7 +1,7 @@
 /**
  * LaunchSense Backend
+ * Full Production Server
  * Version: L12-EXPORT
- * Mode: Render / Prod Ready
  */
 
 const express = require("express");
@@ -13,9 +13,11 @@ const { Parser } = require("json2csv");
 require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
-const { observabilityMiddleware, trackDecision } = require("./observability");
 
-// ─────────────────── ENV CHECK ───────────────────
+const { observabilityMiddleware, trackDecision } = require("./observability");
+const { runDecisionPipeline } = require("./orchestrator");
+
+// ─────────────────── ENV VALIDATION ───────────────────
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach((k) => {
   if (!process.env[k]) {
     console.error("❌ Missing ENV:", k);
@@ -39,7 +41,6 @@ app.use(cors());
 app.use(express.json({ limit: "300kb" }));
 app.use(observabilityMiddleware);
 
-// Rate limit (global, API-key specific baad me)
 app.use(
   rateLimit({
     windowMs: 60 * 1000,
@@ -106,6 +107,72 @@ async function apiAuth(req, res, next) {
 const v1 = express.Router();
 app.use("/v1", v1);
 
+// ─────────────────── DECISION API ───────────────────
+v1.post("/decide", apiAuth, async (req, res) => {
+  try {
+    const input = {
+      game_id: req.game_id,
+      player_id: req.body.player_id,
+      session_id: req.body.session_id,
+      playtime: req.body.playtime,
+      deaths: req.body.deaths,
+      restarts: req.body.restarts,
+      early_quit: req.body.early_quit,
+      sessions: req.body.sessions || [],
+      events: req.body.events || []
+    };
+
+    // Load recent decision history
+    const { data: history, error } = await supabase
+      .from("decision_logs")
+      .select("risk_score")
+      .eq("game_id", req.game_id)
+      .order("created_at", { ascending: true })
+      .limit(20);
+
+    if (error) {
+      console.error(error);
+      return fail(res, 500, "Failed to load decision history");
+    }
+
+    const result = await runDecisionPipeline({
+      input,
+      history: history || []
+    });
+
+    if (!result.ok) {
+      return fail(res, 400, result);
+    }
+
+    // Persist decision log
+    await supabase.from("decision_logs").insert({
+      game_id: req.game_id,
+      decision: result.decision,
+      risk_score: result.risk_score,
+      confidence: result.confidence,
+      trend: result.trend?.trend || "UNKNOWN",
+      build_version: CONFIG.VERSION,
+      created_at: new Date().toISOString()
+    });
+
+    // Persist audit log
+    await supabase.from("audit_logs").insert({
+      game_id: req.game_id,
+      action: "DECISION_MADE",
+      meta: result.ledger,
+      created_at: new Date().toISOString()
+    });
+
+    // Observability
+    trackDecision(result.decision);
+
+    return ok(res, result);
+  } catch (e) {
+    console.error(e);
+    return fail(res, 500, "Decision pipeline failed");
+  }
+});
+
 // ─────────────────── EXPORT: DECISIONS ───────────────────
 v1.get("/export/decisions", apiAuth, async (req, res) => {
   try {
@@ -165,12 +232,6 @@ v1.get("/export/audit", apiAuth, async (req, res) => {
     fail(res, 500, "Audit export failed");
   }
 });
-
-// ─────────────────── PLACEHOLDER: DECIDE ───────────────────
-// 🔴 Orchestrator yahin plug hoga
-// v1.post("/decide", apiAuth, async (req, res) => {
-//   const result = await runDecisionPipeline(...)
-// });
 
 // ─────────────────── HEALTH ───────────────────
 app.get("/health", (_, res) => {
