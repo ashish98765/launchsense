@@ -1,75 +1,54 @@
-import { useEffect, useState } from "react";
-import { useRouter } from "next/router";
+import MainLayout from "../components/layout/MainLayout";
 
-export default function DemoAnalytics() {
-  const router = useRouter();
-  const [data, setData] = useState(null);
-
-  useEffect(() => {
-    fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/api/demo/analytics`)
-      .then(res => res.json())
-      .then(setData);
-  }, []);
-
-  if (!data) return <p style={page}>Loading demo…</p>;
-
-  const decisionColor =
-    data.health === "GO"
-      ? "#16a34a"
-      : data.health === "KILL"
-      ? "#dc2626"
-      : "#d97706";
-
+export default function Demo() {
   return (
-    <div style={page}>
-      <h1>LaunchSense Demo Analysis</h1>
-      <p style={{ color: "#666" }}>
-        This is a <strong>public demo</strong> using sample data.
-      </p>
+    <MainLayout title="Demo – LaunchSense">
+      <div className="max-w-5xl mx-auto px-6 py-16">
+        <h1 className="text-3xl font-semibold mb-4">
+          Demo output
+        </h1>
 
-      <div style={{ ...card, border: `3px solid ${decisionColor}` }}>
-        <h2 style={{ color: decisionColor }}>
-          FINAL DECISION: {data.health}
-        </h2>
+        <p className="text-muted-foreground max-w-2xl mb-12">
+          Example of what LaunchSense surfaces after analyzing early
+          playtest sessions.
+        </p>
+
+        <div className="grid gap-8 sm:grid-cols-2">
+          {/* SIGNAL CARD */}
+          <div className="border border-border rounded-xl p-6">
+            <p className="text-sm text-muted-foreground mb-1">
+              Signal
+            </p>
+            <h3 className="text-lg font-medium mb-3">
+              Early Abandonment Risk
+            </h3>
+
+            <p className="text-sm text-muted-foreground mb-4">
+              62% of players exited before 3 minutes.
+            </p>
+
+            <span className="inline-block text-xs px-3 py-1 rounded-full bg-muted">
+              Confidence: Medium
+            </span>
+          </div>
+
+          {/* DECISION CARD */}
+          <div className="border border-border rounded-xl p-6">
+            <p className="text-sm text-muted-foreground mb-1">
+              Recommendation
+            </p>
+
+            <h3 className="text-lg font-medium mb-3">
+              Refine onboarding
+            </h3>
+
+            <p className="text-sm text-muted-foreground">
+              Players struggle before understanding core mechanics.
+              Iteration recommended before scaling traffic.
+            </p>
+          </div>
+        </div>
       </div>
-
-      <div style={card}>
-        <p>Total Sessions: {data.total_sessions}</p>
-        <p>Average Risk: {data.average_risk}</p>
-        <p>GO: {data.go_percent}%</p>
-        <p>ITERATE: {data.iterate_percent}%</p>
-        <p>KILL: {data.kill_percent}%</p>
-      </div>
-
-      <button
-        onClick={() => router.push("/dashboard")}
-        style={primaryBtn}
-      >
-        Analyze Your Own Game →
-      </button>
-    </div>
+    </MainLayout>
   );
 }
-
-// ================= STYLES =================
-const page = {
-  padding: 40,
-  maxWidth: 900,
-};
-
-const card = {
-  marginTop: 24,
-  padding: 20,
-  border: "1px solid #ddd",
-  borderRadius: 12,
-  background: "#fafafa",
-};
-
-const primaryBtn = {
-  marginTop: 30,
-  padding: "12px 18px",
-  background: "#000",
-  color: "#fff",
-  border: "none",
-  cursor: "pointer",
-};
