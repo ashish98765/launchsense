@@ -1,107 +1,40 @@
-/**
- * orchestrator.js
- * Single source of truth for LaunchSense decision flow
- */
+// rulesEngine.js
+// DB-driven rules evaluator (authoritative override layer)
 
-const { decisionSchema } = require("./validator");
-const { extractInsights } = require("./insightEngine");
-const { analyzeTemporal } = require("./temporalEngine");
-const { analyzeTrend } = require("./trendEngine");
-const { buildCounterfactuals } = require("./counterfactualEngine");
-const { generateRecommendations } = require("./recommendationEngine");
-const { buildExplanation } = require("./explainEngine");
-const { buildLedgerEntry } = require("./ledger");
-const { calculateConfidence } = require("./confidenceEngine");
-const { evaluateRules } = require("./ruleEngine");
+async function evaluateRules({ supabase, metrics }) {
+  const { data: rules, error } = await supabase
+    .from("decision_rules")
+    .select("*")
+    .eq("active", true)
+    .order("priority", { ascending: true });
 
-async function runDecisionPipeline({ input, history = [], supabase }) {
-  // 1️⃣ Validate input
-  const parsed = decisionSchema.safeParse(input);
-  if (!parsed.success) {
-    return {
-      ok: false,
-      error: "INVALID_INPUT",
-      details: parsed.error.flatten()
-    };
+  if (error || !rules || rules.length === 0) {
+    return null;
   }
 
-  // 2️⃣ Insights
-  const insights = extractInsights(input);
+  for (const rule of rules) {
+    const value = metrics[rule.rule_key];
+    if (value === undefined || value === null) continue;
 
-  // 3️⃣ Derived metrics (THIS feeds DB rules)
-  const metrics = {
-    early_quit_rate: input.early_quit ? 1 : 0,
-    deaths: input.deaths,
-    restarts: input.restarts,
-    playtime: input.playtime,
-    sessions: input.sessions?.length || 0
-  };
+    const minOk =
+      rule.min_value === null || value >= rule.min_value;
+    const maxOk =
+      rule.max_value === null || value <= rule.max_value;
 
-  // 4️⃣ DB Rules Evaluation (🔥 CORE CHANGE)
-  const ruleResult = await evaluateRules({
-    supabase,
-    metrics
-  });
+    if (minOk && maxOk) {
+      return {
+        decision: rule.decision,
+        matched_rule: rule.rule_key,
+        value,
+        range: [rule.min_value, rule.max_value],
+        priority: rule.priority,
+        description: rule.description || null,
+        source: "DB_RULE"
+      };
+    }
+  }
 
-  // 5️⃣ Confidence
-  const confidence = calculateConfidence(
-    history.length,
-    insights.primary_risk
-  );
-
-  // 6️⃣ Temporal + trend
-  const temporal = analyzeTemporal(history);
-  const trend = analyzeTrend(history);
-
-  // 7️⃣ Counterfactuals
-  const counterfactuals = buildCounterfactuals({
-    risk: 50,
-    confidence,
-    momentum: trend.slope || 0
-  });
-
-  // 8️⃣ Recommendations
-  const recommendations = generateRecommendations(
-    ruleResult.decision,
-    50,
-    insights
-  );
-
-  // 9️⃣ Explanation
-  const explanation = buildExplanation(
-    input,
-    {
-      engagement: 1 - metrics.early_quit_rate,
-      frustration: metrics.deaths > 3 ? 0.7 : 0.3,
-      early_exit: input.early_quit,
-      confidence
-    },
-    ruleResult.decision
-  );
-
-  // 🔟 Ledger
-  const ledger = buildLedgerEntry({
-    game_id: input.game_id,
-    decision: ruleResult.decision,
-    source: "RULE_ENGINE",
-    confidence,
-    explanation_id: explanation.explanation_id,
-    metrics,
-    rule: ruleResult
-  });
-
-  return {
-    ok: true,
-    decision: ruleResult.decision,
-    confidence,
-    insights,
-    temporal,
-    trend,
-    counterfactuals,
-    recommendations,
-    explanation,
-    ledger
-  };
+  return null;
 }
 
-module.exports = { runDecisionPipeline };
+module.exports = { evaluateRules };
