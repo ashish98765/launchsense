@@ -1,7 +1,6 @@
 /**
  * LaunchSense Backend
- * Step 4 — Server Wiring (FINAL)
- * Role: HTTP Gateway + Orchestrator + Persistence
+ * Batch 6 — Production Hardened Server
  */
 
 const express = require("express");
@@ -12,18 +11,13 @@ const crypto = require("crypto");
 require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
-
-// Core engines
 const { runDecisionPipeline } = require("./orchestrator");
 const {
   observabilityMiddleware,
   trackDecision
 } = require("./observability");
 
-// Routes
-const dashboardRoutes = require("./routes/dashboard");
-
-// -------------------- ENV CHECK --------------------
+// ---------------- ENV CHECK ----------------
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach((k) => {
   if (!process.env[k]) {
     console.error("❌ Missing ENV:", k);
@@ -31,37 +25,23 @@ const dashboardRoutes = require("./routes/dashboard");
   }
 });
 
-// -------------------- APP --------------------
+// ---------------- APP ----------------
 const app = express();
 app.disable("x-powered-by");
 
-// -------------------- CONFIG --------------------
+// ---------------- CONFIG ----------------
 const CONFIG = {
   PORT: process.env.PORT || 3000,
   VERSION: "L12-HARDENED"
 };
 
-// -------------------- MIDDLEWARE --------------------
+// ---------------- MIDDLEWARE ----------------
 app.use(helmet());
 app.use(cors());
-
-app.use(
-  express.json({
-    limit: "100kb",
-    strict: true
-  })
-);
-
-// request id
-app.use((req, res, next) => {
-  req.req_id = crypto.randomUUID();
-  next();
-});
-
-// observability (safe)
+app.use(express.json({ limit: "100kb", strict: true }));
 app.use(observabilityMiddleware);
 
-// global rate limit
+// Global rate limit
 app.use(
   rateLimit({
     windowMs: 60 * 1000,
@@ -69,13 +49,19 @@ app.use(
   })
 );
 
-// -------------------- SUPABASE --------------------
+// ---------------- SUPABASE ----------------
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// -------------------- HELPERS --------------------
+// ---------------- REQUEST TRACE ----------------
+app.use((req, res, next) => {
+  res.req_id = crypto.randomUUID();
+  next();
+});
+
+// ---------------- HELPERS ----------------
 function ok(res, data) {
   res.json({
     success: true,
@@ -92,7 +78,7 @@ function fail(res, code, msg) {
   });
 }
 
-// -------------------- AUTH --------------------
+// ---------------- AUTH ----------------
 async function apiAuth(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   const gameId = req.headers["x-game-id"];
@@ -110,7 +96,7 @@ async function apiAuth(req, res, next) {
     .maybeSingle();
 
   if (error || !data || data.disabled) {
-    return fail(res, 401, "API key invalid or disabled");
+    return fail(res, 401, "Invalid or disabled API key");
   }
 
   req.game_id = gameId;
@@ -118,11 +104,11 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-// -------------------- ROUTER --------------------
+// ---------------- ROUTER ----------------
 const v1 = express.Router();
 app.use("/v1", v1);
 
-// -------------------- DECISION RATE LIMIT --------------------
+// Per-game decision limiter
 const decisionLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
@@ -130,7 +116,7 @@ const decisionLimiter = rateLimit({
   legacyHeaders: false
 });
 
-// -------------------- DECISION API --------------------
+// ---------------- DECISION API ----------------
 v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
   try {
     const input = {
@@ -161,7 +147,7 @@ v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
       return fail(res, 400, result);
     }
 
-    // persist decision
+    // Persist decision
     await supabase.from("decision_logs").insert({
       game_id: req.game_id,
       decision: result.decision,
@@ -169,38 +155,37 @@ v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
       confidence: result.confidence,
       trend: result.trend?.trend || "UNKNOWN",
       build_version: CONFIG.VERSION,
-      source: "AI",
       created_at: new Date().toISOString()
     });
 
-    // audit
-    await supabase.from("audit_logs").insert({
-      game_id: req.game_id,
-      action: "DECISION_MADE",
-      meta: result.ledger,
-      created_at: new Date().toISOString()
-    });
+    // Audit log (NON-BLOCKING)
+    try {
+      await supabase.from("audit_logs").insert({
+        game_id: req.game_id,
+        action: "DECISION_MADE",
+        meta: result.ledger,
+        created_at: new Date().toISOString()
+      });
+    } catch (e) {
+      console.warn("⚠️ Audit log failed:", e);
+    }
 
     trackDecision(result.decision);
     return ok(res, result);
-
   } catch (e) {
-    console.error("❌ Decision pipeline error:", e);
+    console.error("❌ Server pipeline error:", e);
 
-    // FAIL-SAFE (never block game)
+    // 🚨 FINAL FAIL-SAFE
     return ok(res, {
       decision: "ITERATE",
       risk_score: 50,
       confidence: "LOW",
-      note: "Fallback decision (system error)"
+      note: "Fallback decision (server error)"
     });
   }
 });
 
-// -------------------- DASHBOARD (READ ONLY) --------------------
-v1.use("/dashboard", dashboardRoutes({ supabase }));
-
-// -------------------- HEALTH --------------------
+// ---------------- HEALTH ----------------
 app.get("/health", (_, res) => {
   res.json({
     status: "ok",
@@ -209,9 +194,9 @@ app.get("/health", (_, res) => {
   });
 });
 
-// -------------------- START --------------------
+// ---------------- START ----------------
 app.listen(CONFIG.PORT, () => {
   console.log(
-    `🚀 LaunchSense ${CONFIG.VERSION} running on :${CONFIG.PORT}`
+    `🚀 LaunchSense ${CONFIG.VERSION} running on port ${CONFIG.PORT}`
   );
 });
