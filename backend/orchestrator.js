@@ -1,166 +1,130 @@
 /**
- * orchestrator.js
- * Batch-4: Learning / Weight Adjustment
+ * LaunchSense Orchestrator
+ * Single source of truth for decision intelligence
+ * Batch 5 – Intelligence integrated
  */
 
 const { decisionSchema } = require("./validator");
+
 const { calculateDecision } = require("./decisionEngine");
+const { buildCounterfactuals } = require("./counterfactualEngine");
+const { calculateConfidence: legacyConfidence } = require("./confidenceEngine");
+
+const { analyzeTemporal } = require("./temporalEngine");
+const { analyzeTrend } = require("./trendEngine");
+
 const { extractInsights } = require("./insightEngine");
+const { generateRecommendations } = require("./recommendationEngine");
+const { buildExplanation } = require("./explainEngine");
 const { buildLedgerEntry } = require("./ledger");
 
-// Batch 1
-const { classifySignals } = require("./signalClassifier");
-const { calculateConfidence } = require("./confidenceEngine");
-const { buildReason } = require("./reasonBuilder");
+// 🧠 Batch 5 – Intelligence layer
+const { normalizeSignals } = require("./model/signalNormalizer");
+const { calculateConfidence } = require("./model/confidenceModel");
 
-// Batch 2
-const { analyzeTrend } = require("./temporalIntelligence");
-
-// Batch 3
-const { compareWithCohort } = require("./cohortEngine");
-
-// ---------------- RULE HELPERS ----------------
-
-async function fetchActiveRules(supabase) {
-  const { data, error } = await supabase
-    .from("decision_rules")
-    .select("*")
-    .eq("active", true)
-    .order("priority", { ascending: false });
-
-  if (error) {
-    console.error("❌ Rule fetch failed:", error);
-    return [];
-  }
-  return data || [];
-}
-
-function applyRules({ rules, metrics }) {
-  for (const rule of rules) {
-    const value = metrics[rule.rule_key];
-    if (value === undefined || value === null) continue;
-
-    const minOk =
-      rule.min_value === null || value >= rule.min_value;
-    const maxOk =
-      rule.max_value === null || value <= rule.max_value;
-
-    if (minOk && maxOk) {
-      return {
-        decision: rule.decision,
-        rule_key: rule.rule_key,
-        priority: rule.priority,
-        source: "DB_RULE"
-      };
-    }
-  }
-  return null;
-}
-
-// ---------------- MAIN PIPELINE ----------------
-
-async function runDecisionPipeline({ input, history = [], supabase }) {
-  // 1️⃣ Validate
+async function runDecisionPipeline({ input, history = [] }) {
+  /* ---------------- VALIDATION ---------------- */
   const parsed = decisionSchema.safeParse(input);
   if (!parsed.success) {
-    return { ok: false, error: "INVALID_INPUT" };
-  }
-
-  // 2️⃣ Insights
-  const insights = extractInsights(input);
-
-  // 3️⃣ Metrics
-  const metrics = {
-    deaths: input.deaths || 0,
-    early_quit: input.early_quit ? 1 : 0,
-    playtime: input.playtime || 0,
-    restarts: input.restarts || 0
-  };
-
-  // 4️⃣ Signals
-  const signals = classifySignals(metrics);
-
-  // 5️⃣ Trend
-  const trend = analyzeTrend(history);
-
-  // 6️⃣ Rules
-  const rules = await fetchActiveRules(supabase);
-  const ruleHit = applyRules({ rules, metrics });
-
-  // 7️⃣ Rule short-circuit
-  if (ruleHit) {
-    const confidence = await calculateConfidence({
-      signals,
-      source: "DB_RULE",
-      supabase
-    });
-
-    const reason =
-      buildReason(signals, ruleHit.decision) +
-      ` Trend: ${trend.direction}`;
-
     return {
-      ok: true,
-      decision: ruleHit.decision,
-      confidence,
-      signals,
-      trend,
-      reason,
-      source: "DB_RULE"
+      ok: false,
+      error: "INVALID_INPUT",
+      details: parsed.error.flatten()
     };
   }
 
-  // 8️⃣ Model decision
+  /* ---------------- NORMALIZATION (B5) ---------------- */
+  const normalizedSignals = normalizeSignals(input, history);
+
+  /* ---------------- INSIGHTS ---------------- */
+  const insights = extractInsights(input);
+
+  /* ---------------- CORE DECISION ---------------- */
   const decisionResult = calculateDecision({
-    early_quit_rate: metrics.early_quit,
-    avg_session_time: metrics.playtime,
-    deaths_per_session: metrics.deaths,
-    restart_rate: metrics.restarts
+    early_quit_rate: input.early_quit ? 1 : 0,
+    avg_session_time: input.playtime,
+    deaths_per_session: input.deaths,
+    restart_rate: input.restarts,
+    signals: normalizedSignals
   });
 
-  // 9️⃣ Cohort
-  const cohort = compareWithCohort(
-    { risk_score: decisionResult.riskScore },
-    history
+  /* ---------------- TEMPORAL INTELLIGENCE ---------------- */
+  const temporal = analyzeTemporal(history);
+
+  /* ---------------- TREND INTELLIGENCE ---------------- */
+  const trend = analyzeTrend(history);
+
+  /* ---------------- COUNTERFACTUALS ---------------- */
+  const counterfactuals = buildCounterfactuals({
+    risk: decisionResult.riskScore / 100,
+    confidence: decisionResult.confidence,
+    momentum: trend.slope || 0
+  });
+
+  /* ---------------- CONFIDENCE (B5) ---------------- */
+  const confidenceLabel = calculateConfidence({
+    riskScore: decisionResult.riskScore,
+    historyLength: history.length,
+    ruleMatched: decisionResult.rule_applied || false
+  });
+
+  /* ---------------- RECOMMENDATIONS ---------------- */
+  const recommendations = generateRecommendations(
+    decisionResult.decision,
+    decisionResult.riskScore,
+    insights
   );
 
-  const confidence = await calculateConfidence({
-    signals,
-    source: "MODEL",
-    supabase
-  });
+  /* ---------------- EXPLANATION ---------------- */
+  const explanation = buildExplanation(
+    input,
+    {
+      engagement: 1 - decisionResult.riskScore / 100,
+      frustration: input.deaths > 3 ? 0.7 : 0.3,
+      early_exit: input.early_quit,
+      confidence: confidenceLabel
+    },
+    decisionResult.decision
+  );
 
-  let reason =
-    buildReason(signals, decisionResult.decision) +
-    ` Trend: ${trend.direction}`;
-
-  if (cohort.relative_risk !== null) {
-    reason += ` Compared to past launches: ${cohort.comparison}`;
-  }
-
+  /* ---------------- LEDGER (IMMUTABLE) ---------------- */
   const ledger = buildLedgerEntry({
     game_id: input.game_id,
     decision: decisionResult.decision,
-    source: "MODEL",
-    confidence,
-    signals,
+    source: "AI",
+    risk_score: decisionResult.riskScore,
+    confidence: confidenceLabel,
+    explanation_id: explanation.explanation_id,
+    temporal,
     trend,
-    cohort,
+    normalizedSignals,
     input
   });
 
+  /* ---------------- FINAL RESPONSE ---------------- */
   return {
     ok: true,
+
+    // Decision
     decision: decisionResult.decision,
     risk_score: decisionResult.riskScore,
-    confidence,
-    signals,
-    trend,
-    cohort,
-    reason,
+    confidence: confidenceLabel,
+
+    // Intelligence
+    signals_normalized: normalizedSignals,
     insights,
-    ledger,
-    source: "MODEL"
+    temporal,
+    trend,
+    counterfactuals,
+
+    // Action layer
+    recommendations,
+
+    // Explainability
+    explanation,
+
+    // Audit
+    ledger
   };
 }
 
