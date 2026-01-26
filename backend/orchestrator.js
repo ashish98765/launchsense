@@ -1,17 +1,21 @@
 /**
  * orchestrator.js
+ * Batch-1 (M1): Deterministic Intelligence
  * DB Rules > Model (fallback)
+ * Adds: signals, confidence, reason
  */
 
 const { decisionSchema } = require("./validator");
 const { calculateDecision } = require("./decisionEngine");
-const { calculateConfidence } = require("./confidenceEngine");
+const { extractInsights } = require("./insightEngine");
 const { analyzeTrend } = require("./trendEngine");
 const { analyzeTemporal } = require("./temporalEngine");
-const { extractInsights } = require("./insightEngine");
-const { generateRecommendations } = require("./recommendationEngine");
-const { buildExplanation } = require("./explainEngine");
 const { buildLedgerEntry } = require("./ledger");
+
+// Batch-1 new layers
+const { classifySignals } = require("./signalClassifier");
+const { calculateConfidence } = require("./confidenceEngine");
+const { buildReason } = require("./reasonBuilder");
 
 // ---------------- RULE HELPERS ----------------
 
@@ -59,34 +63,46 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
   // 1️⃣ Validate
   const parsed = decisionSchema.safeParse(input);
   if (!parsed.success) {
-    return { ok: false, error: "INVALID_INPUT", details: parsed.error.flatten() };
+    return {
+      ok: false,
+      error: "INVALID_INPUT",
+      details: parsed.error.flatten()
+    };
   }
 
   // 2️⃣ Insights
   const insights = extractInsights(input);
 
-  // 3️⃣ Metrics (what rules read)
+  // 3️⃣ Metrics (truth layer)
   const metrics = {
-    deaths: input.deaths,
+    deaths: input.deaths || 0,
     early_quit: input.early_quit ? 1 : 0,
-    playtime: input.playtime,
-    restarts: input.restarts
+    playtime: input.playtime || 0,
+    restarts: input.restarts || 0
   };
 
-  // 4️⃣ DB RULES (AUTHORITATIVE)
+  // 4️⃣ Signal classification (Batch-1)
+  const signals = classifySignals(metrics);
+
+  // 5️⃣ DB RULES (authoritative)
   const rules = await fetchActiveRules(supabase);
   const ruleHit = applyRules({ rules, metrics });
 
-  // 5️⃣ If rule hit → short circuit
+  // 6️⃣ If rule matched → short-circuit
   if (ruleHit) {
-    const confidence = "HIGH";
+    const confidence = calculateConfidence({
+      signals,
+      source: "DB_RULE"
+    });
+
+    const reason = buildReason(signals, ruleHit.decision);
 
     const ledger = buildLedgerEntry({
       game_id: input.game_id,
       decision: ruleHit.decision,
-      source: ruleHit.source,
+      source: "DB_RULE",
       confidence,
-      metrics,
+      signals,
       rule: ruleHit
     });
 
@@ -94,14 +110,15 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
       ok: true,
       decision: ruleHit.decision,
       confidence,
-      primary_reason: ruleHit.description || "DB rule applied",
+      signals,
+      reason,
       insights,
       ledger,
       source: "DB_RULE"
     };
   }
 
-  // 6️⃣ MODEL FALLBACK
+  // 7️⃣ MODEL FALLBACK (no rule hit)
   const decisionResult = calculateDecision({
     early_quit_rate: metrics.early_quit,
     avg_session_time: metrics.playtime,
@@ -109,24 +126,15 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
     restart_rate: metrics.restarts
   });
 
-  const confidence = calculateConfidence(
-    history.length,
-    insights.primary_risk
-  );
+  const confidence = calculateConfidence({
+    signals,
+    source: "MODEL"
+  });
+
+  const reason = buildReason(signals, decisionResult.decision);
 
   const trend = analyzeTrend(history);
   const temporal = analyzeTemporal(history);
-
-  const explanation = buildExplanation(
-    input,
-    {
-      engagement: 1 - decisionResult.riskScore / 100,
-      frustration: metrics.deaths > 3 ? 0.7 : 0.3,
-      early_exit: input.early_quit,
-      confidence
-    },
-    decisionResult.decision
-  );
 
   const ledger = buildLedgerEntry({
     game_id: input.game_id,
@@ -134,7 +142,7 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
     source: "MODEL",
     risk_score: decisionResult.riskScore,
     confidence,
-    explanation_id: explanation.explanation_id,
+    signals,
     temporal,
     input
   });
@@ -144,10 +152,11 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
     decision: decisionResult.decision,
     risk_score: decisionResult.riskScore,
     confidence,
+    signals,
+    reason,
     insights,
     trend,
     temporal,
-    explanation,
     ledger,
     source: "MODEL"
   };
