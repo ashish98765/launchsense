@@ -3,85 +3,56 @@
 @tailwind utilities;
 
 /* =========================
-   BASE STYLES
+   BASE
    ========================= */
 @layer base {
   html {
-    font-feature-settings: "kern";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply bg-white text-gray-900 antialiased;
   }
 
-  /* Headings */
   h1 {
-    @apply text-4xl md:text-6xl font-semibold tracking-tight leading-tight;
+    @apply text-4xl md:text-6xl font-semibold tracking-tight;
   }
 
   h2 {
-    @apply text-2xl md:text-3xl font-medium tracking-tight;
+    @apply text-2xl md:text-3xl font-medium;
   }
 
   h3 {
     @apply text-xl font-medium;
   }
 
-  h4 {
-    @apply text-lg font-medium;
-  }
-
-  /* Body text */
   p {
-    @apply text-base text-muted-foreground leading-relaxed;
-  }
-
-  /* Small text */
-  small {
-    @apply text-sm text-muted-foreground;
-  }
-
-  /* Links */
-  a {
-    @apply text-foreground no-underline;
+    @apply text-base text-gray-600 leading-relaxed;
   }
 }
 
 /* =========================
-   COMPONENT TOKENS
+   COMPONENTS
    ========================= */
 @layer components {
-  /* Section spacing */
   .section {
-    @apply max-w-5xl mx-auto px-6 py-28;
+    @apply max-w-5xl mx-auto px-6 py-24;
   }
 
   .section-muted {
-    @apply bg-muted/40;
+    @apply bg-gray-50;
   }
 
-  /* Cards */
   .card {
-    @apply rounded-xl border border-border bg-card p-7 shadow-sm;
+    @apply rounded-xl border border-gray-200 bg-white p-6 shadow-sm;
   }
 
-  /* Buttons */
   .btn-primary {
-    @apply px-8 py-3 rounded-md bg-primary text-primary-foreground font-medium shadow-md hover:shadow-lg transition;
+    @apply px-8 py-3 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 transition;
   }
 
   .btn-secondary {
-    @apply px-6 py-3 rounded-md border border-border text-foreground hover:bg-muted transition;
-  }
-}
-
-/* =========================
-   UTILITIES (OPTIONAL)
-   ========================= */
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
+    @apply px-6 py-3 rounded-md border border-gray-300 text-gray-900 hover:bg-gray-100 transition;
   }
 }
