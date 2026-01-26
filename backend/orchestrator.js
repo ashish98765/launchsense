@@ -1,21 +1,21 @@
 /**
  * orchestrator.js
- * Batch-1 (M1): Deterministic Intelligence
+ * Batch-2: Temporal Intelligence
  * DB Rules > Model (fallback)
- * Adds: signals, confidence, reason
  */
 
 const { decisionSchema } = require("./validator");
 const { calculateDecision } = require("./decisionEngine");
 const { extractInsights } = require("./insightEngine");
-const { analyzeTrend } = require("./trendEngine");
-const { analyzeTemporal } = require("./temporalEngine");
 const { buildLedgerEntry } = require("./ledger");
 
-// Batch-1 new layers
+// Batch-1
 const { classifySignals } = require("./signalClassifier");
 const { calculateConfidence } = require("./confidenceEngine");
 const { buildReason } = require("./reasonBuilder");
+
+// Batch-2
+const { analyzeTrend } = require("./temporalIntelligence");
 
 // ---------------- RULE HELPERS ----------------
 
@@ -47,9 +47,7 @@ function applyRules({ rules, metrics }) {
       return {
         decision: rule.decision,
         rule_key: rule.rule_key,
-        value,
         priority: rule.priority,
-        description: rule.description || null,
         source: "DB_RULE"
       };
     }
@@ -63,17 +61,13 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
   // 1️⃣ Validate
   const parsed = decisionSchema.safeParse(input);
   if (!parsed.success) {
-    return {
-      ok: false,
-      error: "INVALID_INPUT",
-      details: parsed.error.flatten()
-    };
+    return { ok: false, error: "INVALID_INPUT" };
   }
 
   // 2️⃣ Insights
   const insights = extractInsights(input);
 
-  // 3️⃣ Metrics (truth layer)
+  // 3️⃣ Metrics
   const metrics = {
     deaths: input.deaths || 0,
     early_quit: input.early_quit ? 1 : 0,
@@ -81,44 +75,39 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
     restarts: input.restarts || 0
   };
 
-  // 4️⃣ Signal classification (Batch-1)
+  // 4️⃣ Signals (Batch-1)
   const signals = classifySignals(metrics);
 
-  // 5️⃣ DB RULES (authoritative)
+  // 5️⃣ Trend (Batch-2)
+  const trend = analyzeTrend(history);
+
+  // 6️⃣ Rules (authoritative)
   const rules = await fetchActiveRules(supabase);
   const ruleHit = applyRules({ rules, metrics });
 
-  // 6️⃣ If rule matched → short-circuit
+  // 7️⃣ Rule short-circuit
   if (ruleHit) {
     const confidence = calculateConfidence({
       signals,
       source: "DB_RULE"
     });
 
-    const reason = buildReason(signals, ruleHit.decision);
-
-    const ledger = buildLedgerEntry({
-      game_id: input.game_id,
-      decision: ruleHit.decision,
-      source: "DB_RULE",
-      confidence,
-      signals,
-      rule: ruleHit
-    });
+    const reason =
+      buildReason(signals, ruleHit.decision) +
+      ` Trend: ${trend.direction} (${trend.strength})`;
 
     return {
       ok: true,
       decision: ruleHit.decision,
       confidence,
       signals,
+      trend,
       reason,
-      insights,
-      ledger,
       source: "DB_RULE"
     };
   }
 
-  // 7️⃣ MODEL FALLBACK (no rule hit)
+  // 8️⃣ Model fallback
   const decisionResult = calculateDecision({
     early_quit_rate: metrics.early_quit,
     avg_session_time: metrics.playtime,
@@ -131,19 +120,17 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
     source: "MODEL"
   });
 
-  const reason = buildReason(signals, decisionResult.decision);
-
-  const trend = analyzeTrend(history);
-  const temporal = analyzeTemporal(history);
+  const reason =
+    buildReason(signals, decisionResult.decision) +
+    ` Trend: ${trend.direction} (${trend.strength})`;
 
   const ledger = buildLedgerEntry({
     game_id: input.game_id,
     decision: decisionResult.decision,
     source: "MODEL",
-    risk_score: decisionResult.riskScore,
     confidence,
     signals,
-    temporal,
+    trend,
     input
   });
 
@@ -153,10 +140,9 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
     risk_score: decisionResult.riskScore,
     confidence,
     signals,
+    trend,
     reason,
     insights,
-    trend,
-    temporal,
     ledger,
     source: "MODEL"
   };
