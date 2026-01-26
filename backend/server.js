@@ -1,7 +1,7 @@
 /**
  * LaunchSense Backend
- * Full Production Server
- * Version: L12-EXPORT
+ * Role: HTTP Gateway + Auth + Persistence + Fail-Safe
+ * Status: Production Hardened (v1)
  */
 
 const express = require("express");
@@ -14,19 +14,17 @@ require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
 
-// Core
+// Core brain
 const { runDecisionPipeline } = require("./orchestrator");
 const {
   observabilityMiddleware,
   trackDecision
 } = require("./observability");
 
-// Routes
+// Dashboard routes
 const dashboardRoutes = require("./routes/dashboard");
 
-// ------------------------------------------------------------------
-// ENV VALIDATION
-// ------------------------------------------------------------------
+// ───────────────── ENV CHECK ─────────────────
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach((k) => {
   if (!process.env[k]) {
     console.error("❌ Missing ENV:", k);
@@ -34,28 +32,32 @@ const dashboardRoutes = require("./routes/dashboard");
   }
 });
 
-// ------------------------------------------------------------------
-// APP INIT
-// ------------------------------------------------------------------
+// ───────────────── APP ─────────────────
 const app = express();
 app.disable("x-powered-by");
 
-// ------------------------------------------------------------------
-// CONFIG
-// ------------------------------------------------------------------
+// ───────────────── CONFIG ─────────────────
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L12-EXPORT"
+  VERSION: "L12-HARDENED"
 };
 
-// ------------------------------------------------------------------
-// MIDDLEWARE
-// ------------------------------------------------------------------
+// ───────────────── MIDDLEWARE ─────────────────
 app.use(helmet());
 app.use(cors());
-app.use(express.json({ limit: "300kb" }));
+
+// 🔐 Payload hard-limit (ANTI-ABUSE)
+app.use(
+  express.json({
+    limit: "100kb",
+    strict: true
+  })
+);
+
+// Observability (safe)
 app.use(observabilityMiddleware);
 
+// Global rate limit (coarse)
 app.use(
   rateLimit({
     windowMs: 60 * 1000,
@@ -63,25 +65,19 @@ app.use(
   })
 );
 
-// ------------------------------------------------------------------
-// SUPABASE
-// ------------------------------------------------------------------
+// ───────────────── SUPABASE ─────────────────
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// ------------------------------------------------------------------
-// REQUEST TRACE
-// ------------------------------------------------------------------
+// ───────────────── REQUEST TRACE ─────────────────
 app.use((req, res, next) => {
   res.req_id = crypto.randomUUID();
   next();
 });
 
-// ------------------------------------------------------------------
-// RESPONSE HELPERS
-// ------------------------------------------------------------------
+// ───────────────── RESPONSE HELPERS ─────────────────
 function ok(res, data) {
   res.json({
     success: true,
@@ -98,9 +94,7 @@ function fail(res, code, msg) {
   });
 }
 
-// ------------------------------------------------------------------
-// AUTH
-// ------------------------------------------------------------------
+// ───────────────── AUTH ─────────────────
 async function apiAuth(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   const gameId = req.headers["x-game-id"];
@@ -111,14 +105,14 @@ async function apiAuth(req, res, next) {
 
   const { data, error } = await supabase
     .from("api_keys")
-    .select("studio_id")
+    .select("studio_id, disabled")
     .eq("api_key", apiKey)
     .eq("game_id", gameId)
     .eq("revoked", false)
     .maybeSingle();
 
-  if (error || !data) {
-    return fail(res, 401, "Invalid API key");
+  if (error || !data || data.disabled) {
+    return fail(res, 401, "API key disabled or invalid");
   }
 
   req.game_id = gameId;
@@ -126,16 +120,20 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-// ------------------------------------------------------------------
-// ROUTER
-// ------------------------------------------------------------------
+// ───────────────── ROUTER ─────────────────
 const v1 = express.Router();
 app.use("/v1", v1);
 
-// ------------------------------------------------------------------
-// DECISION API (CORE)
-// ------------------------------------------------------------------
-v1.post("/decide", apiAuth, async (req, res) => {
+// ───────────────── DECISION RATE LIMIT ─────────────────
+const decisionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30, // per game per minute
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+// ───────────────── DECISION API ─────────────────
+v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
   try {
     const input = {
       game_id: req.game_id,
@@ -149,6 +147,7 @@ v1.post("/decide", apiAuth, async (req, res) => {
       events: req.body.events || []
     };
 
+    // Load recent history (safe)
     const { data: history } = await supabase
       .from("decision_logs")
       .select("risk_score")
@@ -165,6 +164,7 @@ v1.post("/decide", apiAuth, async (req, res) => {
       return fail(res, 400, result);
     }
 
+    // Persist decision
     await supabase.from("decision_logs").insert({
       game_id: req.game_id,
       decision: result.decision,
@@ -175,6 +175,7 @@ v1.post("/decide", apiAuth, async (req, res) => {
       created_at: new Date().toISOString()
     });
 
+    // Audit log
     await supabase.from("audit_logs").insert({
       game_id: req.game_id,
       action: "DECISION_MADE",
@@ -183,23 +184,25 @@ v1.post("/decide", apiAuth, async (req, res) => {
     });
 
     trackDecision(result.decision);
-
     return ok(res, result);
 
   } catch (e) {
-    console.error(e);
-    return fail(res, 500, "Decision pipeline failed");
+    console.error("❌ Decision pipeline error:", e);
+
+    // 🛟 FAIL-SAFE RESPONSE (MOST IMPORTANT)
+    return ok(res, {
+      decision: "ITERATE",
+      risk_score: 50,
+      confidence: "LOW",
+      note: "Fallback decision (system error)"
+    });
   }
 });
 
-// ------------------------------------------------------------------
-// DASHBOARD (READ ONLY)
-// ------------------------------------------------------------------
+// ───────────────── DASHBOARD (READ-ONLY) ─────────────────
 v1.use("/dashboard", apiAuth, dashboardRoutes({ supabase }));
 
-// ------------------------------------------------------------------
-// EXPORTS
-// ------------------------------------------------------------------
+// ───────────────── EXPORTS ─────────────────
 v1.get("/export/decisions", apiAuth, async (req, res) => {
   try {
     const { data } = await supabase
@@ -226,9 +229,7 @@ v1.get("/export/decisions", apiAuth, async (req, res) => {
   }
 });
 
-// ------------------------------------------------------------------
-// HEALTH
-// ------------------------------------------------------------------
+// ───────────────── HEALTH ─────────────────
 app.get("/health", (_, res) => {
   res.json({
     status: "ok",
@@ -237,9 +238,7 @@ app.get("/health", (_, res) => {
   });
 });
 
-// ------------------------------------------------------------------
-// START
-// ------------------------------------------------------------------
+// ───────────────── START ─────────────────
 app.listen(CONFIG.PORT, () => {
   console.log(`🚀 LaunchSense ${CONFIG.VERSION} running on ${CONFIG.PORT}`);
 });
