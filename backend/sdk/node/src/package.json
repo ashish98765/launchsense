@@ -1,0 +1,8 @@
+{
+  "name": "@launchsense/node",
+  "version": "0.1.0",
+  "description": "LaunchSense Node SDK",
+  "main": "src/index.js",
+  "types": "src/types.d.ts",
+  "license": "MIT"
+}
