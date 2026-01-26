@@ -1,7 +1,7 @@
 /**
  * LaunchSense Backend
- * Role: HTTP Gateway + Auth + Rules + Persistence
- * Status: Production Hardened (RULES v1)
+ * Role: API Gateway + Rules + Orchestrator
+ * Status: Production Hardened (DB Rules Enabled)
  */
 
 const express = require("express");
@@ -15,12 +15,14 @@ const { createClient } = require("@supabase/supabase-js");
 
 // Core pipeline
 const { runDecisionPipeline } = require("./orchestrator");
+
+// Observability
 const {
   observabilityMiddleware,
   trackDecision
 } = require("./observability");
 
-// ---------------- ENV CHECK ----------------
+// -------------------- ENV CHECK --------------------
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach((k) => {
   if (!process.env[k]) {
     console.error("❌ Missing ENV:", k);
@@ -28,17 +30,17 @@ const {
   }
 });
 
-// ---------------- APP ----------------
+// -------------------- APP --------------------
 const app = express();
 app.disable("x-powered-by");
 
-// ---------------- CONFIG ----------------
+// -------------------- CONFIG --------------------
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "RULES-V1"
+  VERSION: "L13-RULED"
 };
 
-// ---------------- MIDDLEWARE ----------------
+// -------------------- MIDDLEWARE --------------------
 app.use(helmet());
 app.use(cors());
 
@@ -58,19 +60,19 @@ app.use(
   })
 );
 
-// ---------------- SUPABASE ----------------
+// -------------------- SUPABASE --------------------
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// ---------------- REQUEST TRACE ----------------
+// -------------------- REQUEST TRACE --------------------
 app.use((req, res, next) => {
   res.req_id = crypto.randomUUID();
   next();
 });
 
-// ---------------- HELPERS ----------------
+// -------------------- RESPONSE HELPERS --------------------
 function ok(res, data) {
   res.json({
     success: true,
@@ -87,7 +89,7 @@ function fail(res, code, msg) {
   });
 }
 
-// ---------------- AUTH ----------------
+// -------------------- AUTH --------------------
 async function apiAuth(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   const gameId = req.headers["x-game-id"];
@@ -113,12 +115,20 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-// ---------------- ROUTER ----------------
+// -------------------- ROUTER --------------------
 const v1 = express.Router();
 app.use("/v1", v1);
 
-// ---------------- DECISION API ----------------
-v1.post("/decide", apiAuth, async (req, res) => {
+// -------------------- DECISION RATE LIMIT --------------------
+const decisionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+// -------------------- DECISION API --------------------
+v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
   try {
     const input = {
       game_id: req.game_id,
@@ -154,8 +164,9 @@ v1.post("/decide", apiAuth, async (req, res) => {
     await supabase.from("decision_logs").insert({
       game_id: req.game_id,
       decision: result.decision,
-      risk_score: 50,
+      risk_score: result.risk_score,
       confidence: result.confidence,
+      source: result.source,
       build_version: CONFIG.VERSION,
       created_at: new Date().toISOString()
     });
@@ -164,26 +175,27 @@ v1.post("/decide", apiAuth, async (req, res) => {
     await supabase.from("audit_logs").insert({
       game_id: req.game_id,
       action: "DECISION_MADE",
-      meta: result.ledger,
+      meta: result.rule || result.ledger || {},
       created_at: new Date().toISOString()
     });
 
     trackDecision(result.decision);
-
     return ok(res, result);
-  } catch (e) {
-    console.error("🔥 Decision crash:", e);
 
-    // FAIL-SAFE (MOST IMPORTANT)
+  } catch (e) {
+    console.error("❌ Pipeline crash:", e);
+
+    // FAIL-SAFE (never break client)
     return ok(res, {
       decision: "ITERATE",
+      risk_score: 50,
       confidence: "LOW",
-      note: "Fallback decision (system error)"
+      note: "Fail-safe fallback (system error)"
     });
   }
 });
 
-// ---------------- HEALTH ----------------
+// -------------------- HEALTH --------------------
 app.get("/health", (_, res) => {
   res.json({
     status: "ok",
@@ -192,9 +204,9 @@ app.get("/health", (_, res) => {
   });
 });
 
-// ---------------- START ----------------
+// -------------------- START --------------------
 app.listen(CONFIG.PORT, () => {
   console.log(
-    `🚀 LaunchSense ${CONFIG.VERSION} running on ${CONFIG.PORT}`
+    `🚀 LaunchSense ${CONFIG.VERSION} running on port ${CONFIG.PORT}`
   );
 });
