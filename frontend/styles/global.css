@@ -2,57 +2,44 @@
 @tailwind components;
 @tailwind utilities;
 
-/* =========================
-   BASE
-   ========================= */
-@layer base {
-  html {
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
-
-  body {
-    @apply bg-white text-gray-900 antialiased;
-  }
-
-  h1 {
-    @apply text-4xl md:text-6xl font-semibold tracking-tight;
-  }
-
-  h2 {
-    @apply text-2xl md:text-3xl font-medium;
-  }
-
-  h3 {
-    @apply text-xl font-medium;
-  }
-
-  p {
-    @apply text-base text-gray-600 leading-relaxed;
-  }
+/* Base reset */
+html,
+body {
+  padding: 0;
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial;
+  background-color: #ffffff;
+  color: #111827;
 }
 
-/* =========================
-   COMPONENTS
-   ========================= */
-@layer components {
-  .section {
-    @apply max-w-5xl mx-auto px-6 py-24;
-  }
+* {
+  box-sizing: border-box;
+}
 
-  .section-muted {
-    @apply bg-gray-50;
-  }
+/* Links */
+a {
+  color: inherit;
+  text-decoration: none;
+}
 
-  .card {
-    @apply rounded-xl border border-gray-200 bg-white p-6 shadow-sm;
-  }
+/* Utilities override */
+.text-muted-foreground {
+  color: #6b7280;
+}
 
-  .btn-primary {
-    @apply px-8 py-3 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 transition;
-  }
+.bg-card {
+  background-color: #ffffff;
+}
 
-  .btn-secondary {
-    @apply px-6 py-3 rounded-md border border-gray-300 text-gray-900 hover:bg-gray-100 transition;
-  }
+.border-border {
+  border-color: #e5e7eb;
+}
+
+.bg-background {
+  background-color: #ffffff;
+}
+
+.bg-muted\/40 {
+  background-color: rgba(243, 244, 246, 0.4);
 }
