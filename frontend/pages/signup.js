@@ -1,50 +1,42 @@
-import { useState } from "react";
+import MainLayout from "../components/layout/MainLayout";
 
 export default function Signup() {
-  const [email, setEmail] = useState("");
-  const [message, setMessage] = useState("");
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setMessage("Submitting...");
-
-    try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL}/signup`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email }),
-        }
-      );
-
-      const data = await res.json();
-
-      if (data.success) {
-        setMessage("✅ Signup successful");
-        setEmail("");
-      } else {
-        setMessage("❌ " + (data.error || "Signup failed"));
-      }
-    } catch (err) {
-      setMessage("❌ Server error");
-    }
-  };
-
   return (
-    <div style={{ padding: 40 }}>
-      <h1>Signup</h1>
+    <MainLayout title="Get started – LaunchSense">
+      <div className="max-w-md mx-auto px-6 py-16">
+        <h1 className="text-2xl font-semibold mb-2">
+          Get started
+        </h1>
 
-      <form onSubmit={handleSubmit}>
-        <input
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="Email"
-        />
-        <button type="submit">Submit</button>
-      </form>
+        <p className="text-muted-foreground mb-8">
+          Create an account to analyze your first test build.
+        </p>
 
-      {message && <p>{message}</p>}
-    </div>
+        <form className="space-y-4">
+          <input
+            type="email"
+            placeholder="Email"
+            className="w-full border border-border rounded-lg px-4 py-3"
+          />
+
+          <input
+            type="password"
+            placeholder="Password"
+            className="w-full border border-border rounded-lg px-4 py-3"
+          />
+
+          <button
+            type="submit"
+            className="w-full bg-primary text-primary-foreground rounded-lg py-3 font-medium"
+          >
+            Create account
+          </button>
+        </form>
+
+        <p className="text-xs text-muted-foreground mt-6">
+          No spam. No dark patterns. Cancel anytime.
+        </p>
+      </div>
+    </MainLayout>
   );
 }
