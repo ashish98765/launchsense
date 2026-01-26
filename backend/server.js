@@ -1,7 +1,7 @@
 /**
  * LaunchSense Backend
- * API Gateway + Rules Engine + Orchestrator
- * FINAL STABLE SERVER
+ * Step 4 — Server Wiring (FINAL)
+ * Role: HTTP Gateway + Orchestrator + Persistence
  */
 
 const express = require("express");
@@ -12,7 +12,16 @@ const crypto = require("crypto");
 require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
+
+// Core engines
 const { runDecisionPipeline } = require("./orchestrator");
+const {
+  observabilityMiddleware,
+  trackDecision
+} = require("./observability");
+
+// Routes
+const dashboardRoutes = require("./routes/dashboard");
 
 // -------------------- ENV CHECK --------------------
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach((k) => {
@@ -26,9 +35,16 @@ const { runDecisionPipeline } = require("./orchestrator");
 const app = express();
 app.disable("x-powered-by");
 
+// -------------------- CONFIG --------------------
+const CONFIG = {
+  PORT: process.env.PORT || 3000,
+  VERSION: "L12-HARDENED"
+};
+
 // -------------------- MIDDLEWARE --------------------
 app.use(helmet());
 app.use(cors());
+
 app.use(
   express.json({
     limit: "100kb",
@@ -36,6 +52,16 @@ app.use(
   })
 );
 
+// request id
+app.use((req, res, next) => {
+  req.req_id = crypto.randomUUID();
+  next();
+});
+
+// observability (safe)
+app.use(observabilityMiddleware);
+
+// global rate limit
 app.use(
   rateLimit({
     windowMs: 60 * 1000,
@@ -49,15 +75,9 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// -------------------- REQUEST TRACE --------------------
-app.use((req, res, next) => {
-  res.req_id = crypto.randomUUID();
-  next();
-});
-
-// -------------------- RESPONSE HELPERS --------------------
+// -------------------- HELPERS --------------------
 function ok(res, data) {
-  return res.json({
+  res.json({
     success: true,
     request_id: res.req_id,
     data
@@ -65,7 +85,7 @@ function ok(res, data) {
 }
 
 function fail(res, code, msg) {
-  return res.status(code).json({
+  res.status(code).json({
     success: false,
     request_id: res.req_id,
     error: msg
@@ -90,7 +110,7 @@ async function apiAuth(req, res, next) {
     .maybeSingle();
 
   if (error || !data || data.disabled) {
-    return fail(res, 401, "Invalid or disabled API key");
+    return fail(res, 401, "API key invalid or disabled");
   }
 
   req.game_id = gameId;
@@ -102,8 +122,16 @@ async function apiAuth(req, res, next) {
 const v1 = express.Router();
 app.use("/v1", v1);
 
-// -------------------- DECISION ENDPOINT --------------------
-v1.post("/decide", apiAuth, async (req, res) => {
+// -------------------- DECISION RATE LIMIT --------------------
+const decisionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+// -------------------- DECISION API --------------------
+v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
   try {
     const input = {
       game_id: req.game_id,
@@ -121,91 +149,69 @@ v1.post("/decide", apiAuth, async (req, res) => {
       .from("decision_logs")
       .select("risk_score")
       .eq("game_id", req.game_id)
-      .order("created_at", { ascending: false })
+      .order("created_at", { ascending: true })
       .limit(20);
 
     const result = await runDecisionPipeline({
       input,
-      history: history || [],
-      supabase
+      history: history || []
     });
 
     if (!result.ok) {
       return fail(res, 400, result);
     }
 
-    // Persist decision
+    // persist decision
     await supabase.from("decision_logs").insert({
       game_id: req.game_id,
       decision: result.decision,
-      risk_score: result.risk_score || null,
+      risk_score: result.risk_score,
       confidence: result.confidence,
-      source: result.source || "UNKNOWN",
+      trend: result.trend?.trend || "UNKNOWN",
+      build_version: CONFIG.VERSION,
+      source: "AI",
       created_at: new Date().toISOString()
     });
 
-    return ok(res, result);
-  } catch (e) {
-    console.error("❌ Decision crash:", e);
+    // audit
+    await supabase.from("audit_logs").insert({
+      game_id: req.game_id,
+      action: "DECISION_MADE",
+      meta: result.ledger,
+      created_at: new Date().toISOString()
+    });
 
-    // FAIL-SAFE (client never breaks)
+    trackDecision(result.decision);
+    return ok(res, result);
+
+  } catch (e) {
+    console.error("❌ Decision pipeline error:", e);
+
+    // FAIL-SAFE (never block game)
     return ok(res, {
       decision: "ITERATE",
+      risk_score: 50,
       confidence: "LOW",
-      note: "Fail-safe fallback"
+      note: "Fallback decision (system error)"
     });
   }
 });
 
-// -------------------- RULES CRUD (DASHBOARD) --------------------
-v1.get("/rules", apiAuth, async (_, res) => {
-  const { data } = await supabase
-    .from("decision_rules")
-    .select("*")
-    .order("priority", { ascending: false });
-
-  return res.json(data);
-});
-
-v1.post("/rules", apiAuth, async (req, res) => {
-  const { rule_key, min_value, max_value, decision, priority, description } =
-    req.body;
-
-  const { data, error } = await supabase.from("decision_rules").insert({
-    rule_key,
-    min_value,
-    max_value,
-    decision,
-    priority,
-    active: true,
-    description
-  });
-
-  return res.json({ data, error });
-});
-
-v1.patch("/rules/:id/toggle", apiAuth, async (req, res) => {
-  const { id } = req.params;
-  const { active } = req.body;
-
-  const { data } = await supabase
-    .from("decision_rules")
-    .update({ active })
-    .eq("id", id);
-
-  return res.json(data);
-});
+// -------------------- DASHBOARD (READ ONLY) --------------------
+v1.use("/dashboard", dashboardRoutes({ supabase }));
 
 // -------------------- HEALTH --------------------
 app.get("/health", (_, res) => {
   res.json({
     status: "ok",
+    version: CONFIG.VERSION,
     time: new Date().toISOString()
   });
 });
 
 // -------------------- START --------------------
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 LaunchSense server running on port ${PORT}`);
+app.listen(CONFIG.PORT, () => {
+  console.log(
+    `🚀 LaunchSense ${CONFIG.VERSION} running on :${CONFIG.PORT}`
+  );
 });
