@@ -1,7 +1,7 @@
 /**
  * LaunchSense Backend
- * Role: HTTP Gateway + Auth + Persistence + Fail-Safe
- * Status: Production Hardened (v1)
+ * Role: HTTP Gateway + Orchestration + Persistence
+ * Status: Production Hardened (no optional deps)
  */
 
 const express = require("express");
@@ -9,7 +9,6 @@ const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const crypto = require("crypto");
-const { Parser } = require("json2csv");
 require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
@@ -21,7 +20,7 @@ const {
   trackDecision
 } = require("./observability");
 
-// ───────────────── ENV CHECK ─────────────────
+// ---------------- ENV CHECK ----------------
 ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"].forEach((k) => {
   if (!process.env[k]) {
     console.error("❌ Missing ENV:", k);
@@ -29,17 +28,17 @@ const {
   }
 });
 
-// ───────────────── APP ─────────────────
+// ---------------- APP ----------------
 const app = express();
 app.disable("x-powered-by");
 
-// ───────────────── CONFIG ─────────────────
+// ---------------- CONFIG ----------------
 const CONFIG = {
   PORT: process.env.PORT || 3000,
   VERSION: "L12-HARDENED"
 };
 
-// ───────────────── MIDDLEWARE ─────────────────
+// ---------------- MIDDLEWARE ----------------
 app.use(helmet());
 app.use(cors());
 
@@ -50,10 +49,8 @@ app.use(
   })
 );
 
-// Observability (safe)
 app.use(observabilityMiddleware);
 
-// Global coarse rate limit
 app.use(
   rateLimit({
     windowMs: 60 * 1000,
@@ -61,21 +58,21 @@ app.use(
   })
 );
 
-// ───────────────── SUPABASE ─────────────────
+// ---------------- SUPABASE ----------------
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// ───────────────── REQUEST TRACE ─────────────────
+// ---------------- REQUEST TRACE ----------------
 app.use((req, res, next) => {
-  res.req_id = crypto.randomUUID();
+  req.req_id = crypto.randomUUID();
   next();
 });
 
-// ───────────────── RESPONSE HELPERS ─────────────────
+// ---------------- RESPONSE HELPERS ----------------
 function ok(res, data) {
-  res.json({
+  return res.json({
     success: true,
     request_id: res.req_id,
     data
@@ -83,14 +80,14 @@ function ok(res, data) {
 }
 
 function fail(res, code, msg) {
-  res.status(code).json({
+  return res.status(code).json({
     success: false,
     request_id: res.req_id,
     error: msg
   });
 }
 
-// ───────────────── AUTH ─────────────────
+// ---------------- AUTH ----------------
 async function apiAuth(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   const gameId = req.headers["x-game-id"];
@@ -108,7 +105,7 @@ async function apiAuth(req, res, next) {
     .maybeSingle();
 
   if (error || !data || data.disabled) {
-    return fail(res, 401, "API key disabled or invalid");
+    return fail(res, 401, "API key invalid or disabled");
   }
 
   req.game_id = gameId;
@@ -116,11 +113,11 @@ async function apiAuth(req, res, next) {
   next();
 }
 
-// ───────────────── ROUTER ─────────────────
+// ---------------- ROUTER ----------------
 const v1 = express.Router();
 app.use("/v1", v1);
 
-// Per-game decision rate limit
+// ---------------- DECISION RATE LIMIT ----------------
 const decisionLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
@@ -128,7 +125,7 @@ const decisionLimiter = rateLimit({
   legacyHeaders: false
 });
 
-// ───────────────── DECISION API ─────────────────
+// ---------------- DECISION API ----------------
 v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
   try {
     const input = {
@@ -148,18 +145,17 @@ v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
       .from("decision_logs")
       .select("risk_score")
       .eq("game_id", req.game_id)
-      .order("created_at", { ascending: false })
+      .order("created_at", { ascending: true })
       .limit(20);
 
     if (error) {
       console.error(error);
-      return fail(res, 500, "Failed to load decision history");
+      return fail(res, 500, "Failed to load history");
     }
 
     const result = await runDecisionPipeline({
       input,
-      history: history || [],
-      supabase
+      history: history || []
     });
 
     if (!result.ok) {
@@ -177,7 +173,7 @@ v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
       created_at: new Date().toISOString()
     });
 
-    // Audit log
+    // Audit
     await supabase.from("audit_logs").insert({
       game_id: req.game_id,
       action: "DECISION_MADE",
@@ -187,52 +183,21 @@ v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
 
     trackDecision(result.decision);
     return ok(res, result);
-  } catch (e) {
-    console.error("❌ Decision pipeline error:", e);
 
-    // FAIL-SAFE RESPONSE (MOST IMPORTANT)
+  } catch (e) {
+    console.error("❌ Decision pipeline crash:", e);
+
+    // FAIL-SAFE RESPONSE
     return ok(res, {
       decision: "ITERATE",
       risk_score: 50,
       confidence: "LOW",
-      note: "Fallback decision (system error)"
+      note: "Fail-safe fallback"
     });
   }
 });
 
-// ───────────────── EXPORTS ─────────────────
-v1.get("/export/decisions", apiAuth, async (req, res) => {
-  try {
-    const { data } = await supabase
-      .from("decision_logs")
-      .select("created_at, build_version, decision, risk_score, trend")
-      .eq("game_id", req.game_id)
-      .order("created_at", { ascending: true });
-
-    if (!data || data.length === 0) {
-      return fail(res, 404, "No decision data");
-    }
-
-    const parser = new Parser({
-      fields: [
-        "created_at",
-        "build_version",
-        "decision",
-        "risk_score",
-        "trend"
-      ]
-    });
-
-    res.header("Content-Type", "text/csv");
-    res.attachment(`launchsense-decisions-${req.game_id}.csv`);
-    res.send(parser.parse(data));
-  } catch (e) {
-    console.error(e);
-    fail(res, 500, "CSV export failed");
-  }
-});
-
-// ───────────────── HEALTH ─────────────────
+// ---------------- HEALTH ----------------
 app.get("/health", (_, res) => {
   res.json({
     status: "ok",
@@ -241,7 +206,7 @@ app.get("/health", (_, res) => {
   });
 });
 
-// ───────────────── START ─────────────────
+// ---------------- START ----------------
 app.listen(CONFIG.PORT, () => {
   console.log(
     `🚀 LaunchSense ${CONFIG.VERSION} running on ${CONFIG.PORT}`
