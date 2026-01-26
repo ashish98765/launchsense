@@ -1,29 +1,51 @@
 import Head from "next/head";
-import Header from "../common/Header";
-import Footer from "../common/Footer";
+import Link from "next/link";
 
 export default function MainLayout({
-  children,
   title,
   description,
+  children,
 }) {
   return (
     <>
       <Head>
-        <title>{title || "LaunchSense"}</title>
-        <meta
-          name="description"
-          content={description || "Decision clarity before launch"}
-        />
+        <title>{title}</title>
+        <meta name="description" content={description} />
       </Head>
 
-      <Header />
+      {/* NAVBAR */}
+      <header className="sticky top-0 z-50 bg-background/80 backdrop-blur border-b border-border">
+        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+          {/* Brand */}
+          <Link href="/" className="font-semibold text-lg">
+            LaunchSense
+          </Link>
 
-      <main className="min-h-screen bg-background text-foreground">
-        {children}
-      </main>
+          {/* Nav */}
+          <nav className="hidden md:flex items-center gap-6 text-sm text-muted-foreground">
+            <Link href="/product" className="hover:text-foreground">
+              Product
+            </Link>
+            <Link href="/example" className="hover:text-foreground">
+              Example
+            </Link>
+            <Link href="/pricing" className="hover:text-foreground">
+              Pricing
+            </Link>
+          </nav>
 
-      <Footer />
+          {/* CTA */}
+          <Link
+            href="/signup"
+            className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium shadow-sm"
+          >
+            Analyze a build
+          </Link>
+        </div>
+      </header>
+
+      {/* CONTENT */}
+      <main>{children}</main>
     </>
   );
 }
