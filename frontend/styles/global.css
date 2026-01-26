@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-feature-settings: "kern";
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+
+  /* Headings */
+  h1 {
+    @apply text-4xl md:text-6xl font-semibold tracking-tight leading-tight;
+  }
+
+  h2 {
+    @apply text-2xl md:text-3xl font-medium tracking-tight;
+  }
+
+  h3 {
+    @apply text-xl font-medium;
+  }
+
+  h4 {
+    @apply text-lg font-medium;
+  }
+
+  /* Body text */
+  p {
+    @apply text-base text-muted-foreground leading-relaxed;
+  }
+
+  /* Small text */
+  small {
+    @apply text-sm text-muted-foreground;
+  }
+}
