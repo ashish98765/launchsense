@@ -2,9 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+/* =========================
+   BASE STYLES
+   ========================= */
 @layer base {
   html {
     font-feature-settings: "kern";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   body {
@@ -36,5 +41,47 @@
   /* Small text */
   small {
     @apply text-sm text-muted-foreground;
+  }
+
+  /* Links */
+  a {
+    @apply text-foreground no-underline;
+  }
+}
+
+/* =========================
+   COMPONENT TOKENS
+   ========================= */
+@layer components {
+  /* Section spacing */
+  .section {
+    @apply max-w-5xl mx-auto px-6 py-28;
+  }
+
+  .section-muted {
+    @apply bg-muted/40;
+  }
+
+  /* Cards */
+  .card {
+    @apply rounded-xl border border-border bg-card p-7 shadow-sm;
+  }
+
+  /* Buttons */
+  .btn-primary {
+    @apply px-8 py-3 rounded-md bg-primary text-primary-foreground font-medium shadow-md hover:shadow-lg transition;
+  }
+
+  .btn-secondary {
+    @apply px-6 py-3 rounded-md border border-border text-foreground hover:bg-muted transition;
+  }
+}
+
+/* =========================
+   UTILITIES (OPTIONAL)
+   ========================= */
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
   }
 }
