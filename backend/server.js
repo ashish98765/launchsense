@@ -1,7 +1,7 @@
 /**
  * LaunchSense Backend
- * Role: HTTP Gateway + Orchestration + Persistence
- * Status: Production Hardened (no optional deps)
+ * Role: HTTP Gateway + Auth + Rules + Persistence
+ * Status: Production Hardened (RULES v1)
  */
 
 const express = require("express");
@@ -13,7 +13,7 @@ require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
 
-// Core brain
+// Core pipeline
 const { runDecisionPipeline } = require("./orchestrator");
 const {
   observabilityMiddleware,
@@ -35,7 +35,7 @@ app.disable("x-powered-by");
 // ---------------- CONFIG ----------------
 const CONFIG = {
   PORT: process.env.PORT || 3000,
-  VERSION: "L12-HARDENED"
+  VERSION: "RULES-V1"
 };
 
 // ---------------- MIDDLEWARE ----------------
@@ -66,13 +66,13 @@ const supabase = createClient(
 
 // ---------------- REQUEST TRACE ----------------
 app.use((req, res, next) => {
-  req.req_id = crypto.randomUUID();
+  res.req_id = crypto.randomUUID();
   next();
 });
 
-// ---------------- RESPONSE HELPERS ----------------
+// ---------------- HELPERS ----------------
 function ok(res, data) {
-  return res.json({
+  res.json({
     success: true,
     request_id: res.req_id,
     data
@@ -80,7 +80,7 @@ function ok(res, data) {
 }
 
 function fail(res, code, msg) {
-  return res.status(code).json({
+  res.status(code).json({
     success: false,
     request_id: res.req_id,
     error: msg
@@ -105,7 +105,7 @@ async function apiAuth(req, res, next) {
     .maybeSingle();
 
   if (error || !data || data.disabled) {
-    return fail(res, 401, "API key invalid or disabled");
+    return fail(res, 401, "Invalid or disabled API key");
   }
 
   req.game_id = gameId;
@@ -117,16 +117,8 @@ async function apiAuth(req, res, next) {
 const v1 = express.Router();
 app.use("/v1", v1);
 
-// ---------------- DECISION RATE LIMIT ----------------
-const decisionLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 30,
-  standardHeaders: true,
-  legacyHeaders: false
-});
-
 // ---------------- DECISION API ----------------
-v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
+v1.post("/decide", apiAuth, async (req, res) => {
   try {
     const input = {
       game_id: req.game_id,
@@ -140,22 +132,18 @@ v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
       events: req.body.events || []
     };
 
-    // Load recent history
-    const { data: history, error } = await supabase
+    // Load history
+    const { data: history } = await supabase
       .from("decision_logs")
       .select("risk_score")
       .eq("game_id", req.game_id)
-      .order("created_at", { ascending: true })
+      .order("created_at", { ascending: false })
       .limit(20);
-
-    if (error) {
-      console.error(error);
-      return fail(res, 500, "Failed to load history");
-    }
 
     const result = await runDecisionPipeline({
       input,
-      history: history || []
+      history: history || [],
+      supabase
     });
 
     if (!result.ok) {
@@ -166,9 +154,8 @@ v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
     await supabase.from("decision_logs").insert({
       game_id: req.game_id,
       decision: result.decision,
-      risk_score: result.risk_score,
+      risk_score: 50,
       confidence: result.confidence,
-      trend: result.trend?.trend || "UNKNOWN",
       build_version: CONFIG.VERSION,
       created_at: new Date().toISOString()
     });
@@ -182,17 +169,16 @@ v1.post("/decide", apiAuth, decisionLimiter, async (req, res) => {
     });
 
     trackDecision(result.decision);
+
     return ok(res, result);
-
   } catch (e) {
-    console.error("❌ Decision pipeline crash:", e);
+    console.error("🔥 Decision crash:", e);
 
-    // FAIL-SAFE RESPONSE
+    // FAIL-SAFE (MOST IMPORTANT)
     return ok(res, {
       decision: "ITERATE",
-      risk_score: 50,
       confidence: "LOW",
-      note: "Fail-safe fallback"
+      note: "Fallback decision (system error)"
     });
   }
 });
