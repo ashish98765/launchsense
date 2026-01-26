@@ -1,7 +1,6 @@
 /**
  * orchestrator.js
- * Batch-3: Comparative Intelligence
- * DB Rules > Model > Trend > Cohort
+ * Batch-4: Learning / Weight Adjustment
  */
 
 const { decisionSchema } = require("./validator");
@@ -84,15 +83,16 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
   // 5️⃣ Trend
   const trend = analyzeTrend(history);
 
-  // 6️⃣ Rules (authoritative)
+  // 6️⃣ Rules
   const rules = await fetchActiveRules(supabase);
   const ruleHit = applyRules({ rules, metrics });
 
   // 7️⃣ Rule short-circuit
   if (ruleHit) {
-    const confidence = calculateConfidence({
+    const confidence = await calculateConfidence({
       signals,
-      source: "DB_RULE"
+      source: "DB_RULE",
+      supabase
     });
 
     const reason =
@@ -118,15 +118,16 @@ async function runDecisionPipeline({ input, history = [], supabase }) {
     restart_rate: metrics.restarts
   });
 
-  // 9️⃣ Cohort comparison (Batch-3)
+  // 9️⃣ Cohort
   const cohort = compareWithCohort(
     { risk_score: decisionResult.riskScore },
     history
   );
 
-  const confidence = calculateConfidence({
+  const confidence = await calculateConfidence({
     signals,
-    source: "MODEL"
+    source: "MODEL",
+    supabase
   });
 
   let reason =
