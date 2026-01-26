@@ -2,8 +2,7 @@ import { useRouter } from "next/router";
 import MainLayout from "../../components/layout/MainLayout";
 
 export default function GameDetail() {
-  const router = useRouter();
-  const { game_id } = router.query;
+  const { game_id } = useRouter().query;
 
   return (
     <MainLayout title={`Analysis – ${game_id}`}>
@@ -12,32 +11,51 @@ export default function GameDetail() {
           {game_id}
         </h1>
 
-        <p className="text-muted-foreground mb-8">
-          Observed signals from early sessions.
+        <p className="text-muted-foreground mb-10">
+          Analysis based on early session behavior.
         </p>
 
-        <div className="space-y-6">
-          <div className="border border-border rounded-xl p-6">
-            <h3 className="font-medium mb-2">Primary signal</h3>
-            <p className="text-sm text-muted-foreground">
-              Early abandonment detected before engagement stabilizes.
-            </p>
-          </div>
+        {/* SUMMARY */}
+        <section className="border border-border rounded-2xl p-6 mb-8">
+          <h2 className="font-medium mb-2">Summary</h2>
+          <p className="text-sm text-muted-foreground">
+            Players are exiting before core mechanics are understood.
+            Patterns suggest onboarding friction rather than difficulty.
+          </p>
+        </section>
 
-          <div className="border border-border rounded-xl p-6">
-            <h3 className="font-medium mb-2">Confidence level</h3>
-            <p className="text-sm text-muted-foreground">
-              Medium — based on session consistency and replay variance.
-            </p>
-          </div>
+        {/* SIGNALS */}
+        <section className="mb-8">
+          <h2 className="font-medium mb-4">Observed signals</h2>
 
-          <div className="border border-border rounded-xl p-6">
-            <h3 className="font-medium mb-2">Suggested focus</h3>
-            <p className="text-sm text-muted-foreground">
-              Review onboarding friction before scaling traffic.
-            </p>
+          <div className="space-y-4">
+            <div className="border border-border rounded-xl p-5">
+              <h3 className="text-sm font-medium mb-1">
+                Early abandonment
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                60% of sessions end within the first 3 minutes.
+              </p>
+            </div>
+
+            <div className="border border-border rounded-xl p-5">
+              <h3 className="text-sm font-medium mb-1">
+                Retry concentration
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                Repeated failures occur before tutorial completion.
+              </p>
+            </div>
           </div>
-        </div>
+        </section>
+
+        {/* CONFIDENCE */}
+        <section className="border border-border rounded-2xl p-6">
+          <h2 className="font-medium mb-2">Confidence</h2>
+          <p className="text-sm text-muted-foreground">
+            Medium — patterns are consistent, but sample size is still growing.
+          </p>
+        </section>
       </div>
     </MainLayout>
   );
